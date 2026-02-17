@@ -1,0 +1,133 @@
+:root {
+  --primary: #3b82f6;
+  --secondary: #64748b;
+  --accent: #f59e0b;
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --text: #1e293b;
+  --error: #ef4444;
+  --success: #10b981;
+  --border: #e2e8f0;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+  background-color: var(--background);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+header {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+main {
+  padding: 2rem 0;
+  min-height: calc(100vh - 64px);
+}
+
+.card {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  padding: 1.5rem;
+}
+
+/* Button styles */
+button {
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: #eff6ff;
+}
+
+.btn-danger {
+  background: var(--error);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/* Form styles */
+input,
+select {
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  header {
+    padding: 0 0.5rem;
+  }
+
+  main {
+    padding: 1rem 0;
+  }
+}
