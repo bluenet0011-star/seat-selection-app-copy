@@ -1,73 +1,114 @@
 import { NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { initializeApp, getApps, cert, App } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { users } = body; // Expecting an array of users for bulk or a single user object
-    const userDataArray = Array.isArray(users) ? users : [body];
+function getAdminApp(): App | null {
+  if (getApps().length > 0) return getApps()[0];
+    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+        const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/^["']|["']$/g, '')?.replace(/\\n/g, "\n");
+          if (!projectId || !clientEmail || !privateKey) return null;
+            try {
+                return initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
+                  } catch (e) {
+                      console.error("Admin init error:", e);
+                          return null;
+                            }
+                            }
 
-    const results = [];
+                            async function createUserViaRestAPI(id: string, email: string, password: string, displayName: string) {
+                              const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+                                if (!apiKey) throw new Error("Firebase API Key not configured");
+                                  const signUpRes = await fetch(
+                                      `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
+                                          { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ email, password, displayName, returnSecureToken: false }) }
+                                                  );
+                                                    const signUpData = await signUpRes.json();
+                                                      if (!signUpRes.ok) {
+                                                          if (signUpData.error?.message === "EMAIL_EXISTS") return { alreadyExists: true };
+                                                              throw new Error(signUpData.error?.message || "Failed to create user");
+                                                                }
+                                                                  return { localId: signUpData.localId, alreadyExists: false };
+                                                                  }
 
-    for (const user of userDataArray) {
-      const { id, name, email, password = "123456" } = user;
+                                                                  async function saveToFirestore(id: string, name: string, email: string) {
+                                                                    const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+                                                                      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+                                                                        const baseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${id}`;
+                                                                          const getRes = await fetch(`${baseUrl}?key=${apiKey}`);
+                                                                            let existingPoints = 10000;
+                                                                              if (getRes.ok) {
+                                                                                  const getData = await getRes.json();
+                                                                                      const pv = getData.fields?.points?.integerValue || getData.fields?.points?.doubleValue;
+                                                                                          if (pv !== undefined) existingPoints = Number(pv);
+                                                                                            }
+                                                                                              const patchUrl = `${baseUrl}?updateMask.fieldPaths=id&updateMask.fieldPaths=name&updateMask.fieldPaths=role&updateMask.fieldPaths=isFirstLogin&updateMask.fieldPaths=email&updateMask.fieldPaths=points&updateMask.fieldPaths=createdAt&key=${apiKey}`;
+                                                                                                const patchRes = await fetch(patchUrl, {
+                                                                                                    method: "PATCH", headers: { "Content-Type": "application/json" },
+                                                                                                        body: JSON.stringify({ fields: {
+                                                                                                              id: { stringValue: id }, name: { stringValue: name },
+                                                                                                                    role: { stringValue: "student" }, isFirstLogin: { booleanValue: true },
+                                                                                                                          email: { stringValue: email }, points: { integerValue: existingPoints },
+                                                                                                                                createdAt: { stringValue: new Date().toISOString() }
+                                                                                                                                    }})
+                                                                                                                                      });
+                                                                                                                                        if (!patchRes.ok) {
+                                                                                                                                            const err = await patchRes.json();
+                                                                                                                                                throw new Error("Firestore save failed: " + JSON.stringify(err));
+                                                                                                                                                  }
+                                                                                                                                                  }
 
-      if (!id || !name || !email) {
-        results.push({ id, status: "error", message: "Missing required fields" });
-        continue;
-      }
-
-      try {
-        // 1. Firebase Auth 사용자 생성 또는 조회
-        let userRecord;
-        try {
-          userRecord = await adminAuth.getUserByEmail(email);
-        } catch (e: any) {
-          if (e.code === 'auth/user-not-found') {
-            userRecord = await adminAuth.createUser({
-              uid: id,
-              email,
-              password,
-              displayName: name,
-            });
-          } else {
-            throw e;
-          }
-        }
-
-        // 2. Firestore 사용자 프로필 생성/업데이트
-        const userRef = adminDb.collection("users").doc(id);
-        const existingDoc = await userRef.get();
-        const existingPoints = existingDoc.exists ? (existingDoc.data()?.points ?? 10000) : 10000;
-
-        await userRef.set({
-          id,
-          name,
-          role: "student",
-          isFirstLogin: true,
-          email,
-          points: existingPoints,
-          createdAt: new Date().toISOString()
-        }, { merge: true });
-
-        results.push({ id, status: "success", uid: userRecord.uid });
-      } catch (error: any) {
-        console.error(`Error creating user ${id}:`, error);
-        results.push({ id, status: "error", message: error.message });
-      }
-    }
-
-    const successCount = results.filter(r => r.status === "success").length;
-    const errors = results.filter(r => r.status === "error");
-
-    return NextResponse.json({
-      success: true,
-      results,
-      message: `${successCount}명의 학생 계정이 처리되었습니다. (초기 비밀번호: 123456, 초기 포인트: 10,000P)`,
-      errorDetail: errors.length > 0 ? errors[0].message : null
-    });
-  } catch (error: any) {
-    console.error("Critical error in create-auth-user API:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-}
+                                                                                                                                                  export async function POST(request: Request) {
+                                                                                                                                                    try {
+                                                                                                                                                        const body = await request.json();
+                                                                                                                                                            const { users } = body;
+                                                                                                                                                                const userDataArray = Array.isArray(users) ? users : [body];
+                                                                                                                                                                    const adminApp = getAdminApp();
+                                                                                                                                                                        const adminAuth = adminApp ? getAuth(adminApp) : null;
+                                                                                                                                                                            const adminDb = adminApp ? getFirestore(adminApp) : null;
+                                                                                                                                                                                const results = [];
+                                                                                                                                                                                    for (const user of userDataArray) {
+                                                                                                                                                                                          const { id, name, email, password = "123456" } = user;
+                                                                                                                                                                                                if (!id || !name || !email) {
+                                                                                                                                                                                                        results.push({ id, status: "error", message: "Missing required fields" });
+                                                                                                                                                                                                                continue;
+                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                            try {
+                                                                                                                                                                                                                                    let uid = id;
+                                                                                                                                                                                                                                            if (adminAuth && adminDb) {
+                                                                                                                                                                                                                                                      let userRecord;
+                                                                                                                                                                                                                                                                try { userRecord = await adminAuth.getUserByEmail(email); }
+                                                                                                                                                                                                                                                                          catch (e: any) {
+                                                                                                                                                                                                                                                                                      if (e.code === "auth/user-not-found") {
+                                                                                                                                                                                                                                                                                                    userRecord = await adminAuth.createUser({ uid: id, email, password, displayName: name });
+                                                                                                                                                                                                                                                                                                                } else throw e;
+                                                                                                                                                                                                                                                                                                                          }
+                                                                                                                                                                                                                                                                                                                                    uid = userRecord.uid;
+                                                                                                                                                                                                                                                                                                                                              const userRef = adminDb.collection("users").doc(id);
+                                                                                                                                                                                                                                                                                                                                                        const existingDoc = await userRef.get();
+                                                                                                                                                                                                                                                                                                                                                                  const existingPoints = existingDoc.exists ? (existingDoc.data()?.points ?? 10000) : 10000;
+                                                                                                                                                                                                                                                                                                                                                                            await userRef.set({ id, name, role: "student", isFirstLogin: true, email, points: existingPoints, createdAt: new Date().toISOString() }, { merge: true });
+                                                                                                                                                                                                                                                                                                                                                                                    } else {
+                                                                                                                                                                                                                                                                                                                                                                                              await createUserViaRestAPI(id, email, password, name);
+                                                                                                                                                                                                                                                                                                                                                                                                        await saveToFirestore(id, name, email);
+                                                                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                                                                        results.push({ id, status: "success", uid });
+                                                                                                                                                                                                                                                                                                                                                                                                                              } catch (error: any) {
+                                                                                                                                                                                                                                                                                                                                                                                                                                      console.error(`Error creating user ${id}:`, error);
+                                                                                                                                                                                                                                                                                                                                                                                                                                              results.push({ id, status: "error", message: error.message });
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                            const successCount = results.filter((r) => r.status === "success").length;
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                const errors = results.filter((r) => r.status === "error");
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    return NextResponse.json({
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                          success: true, results,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                message: `${successCount}명의 학생 계정이 처리되었습니다. (초기 비밀번호: 123456, 초기 포인트: 10,000P)`,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      errorDetail: errors.length > 0 ? errors[0].message : null,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          });
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            } catch (error: any) {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                console.error("Critical error in create-auth-user API:", error);
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    return NextResponse.json({ error: error.message }, { status: 500 });
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      }
