@@ -27,7 +27,8 @@ export default function HomePage() {
   const router = useRouter();
   const [openSessions, setOpenSessions] = useState<Session[]>([]);
   const [openAuctions, setOpenAuctions] = useState<AuctionItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [classesLoading, setClassesLoading] = useState(true);
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
@@ -36,37 +37,87 @@ export default function HomePage() {
   }, []);
 
   const [myClassIds, setMyClassIds] = useState<string[]>([]);
+
+  // 학생 수업 목록 로드
   useEffect(() => {
-    if (!userData || userData.role !== "student") return;
+    if (!userData) return;
+    if (userData.role !== "student") {
+      // 교사는 classId 필터 불필요
+      setClassesLoading(false);
+      return;
+    }
+    if (!userData.id) {
+      setClassesLoading(false);
+      return;
+    }
+
     const q = query(collection(db, "classes"), where("studentIds", "array-contains", userData.id));
-    const unsubscribe = onSnapshot(q, (snapshot) => { setMyClassIds(snapshot.docs.map(doc => doc.id)); });
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setMyClassIds(snapshot.docs.map(doc => doc.id));
+      setClassesLoading(false);
+    }, (error) => {
+      console.error("수업 로드 오류:", error);
+      setClassesLoading(false);
+    });
     return () => unsubscribe();
   }, [userData]);
 
+  // 세션 로드 - 클래스 로딩 완료 후 실행
   useEffect(() => {
     if (!userData) return;
-    const sessionsQuery = query(collection(db, "sessions"), where("status", "in", ["open", "scheduled"]));
+    if (classesLoading) return; // 클래스 목록 로드 대기
+
+    const sessionsQuery = query(
+      collection(db, "sessions"),
+      where("status", "in", ["open", "scheduled"])
+    );
+
     const unsubscribe = onSnapshot(sessionsQuery, (snapshot) => {
       let sessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Session));
-      if (userData.role === "student") sessions = sessions.filter(s => myClassIds.includes((s as any).classId));
+
+      // 학생은 자신의 수업에 연결된 세션만 표시
+      if (userData.role === "student") {
+        sessions = sessions.filter(s => myClassIds.includes((s as any).classId));
+      }
+
       sessions.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
       setOpenSessions(sessions);
-      setLoading(false);
-    }, (error) => { console.error("세션 로드 오류:", error); setLoading(false); });
-    return () => unsubscribe();
-  }, [userData, myClassIds]);
+      setSessionsLoading(false);
+    }, (error) => {
+      console.error("세션 로드 오류:", error);
+      setSessionsLoading(false);
+    });
 
+    return () => unsubscribe();
+  }, [userData, myClassIds, classesLoading]);
+
+  // 경매 로드 - 클래스 로딩 완료 후 실행
   useEffect(() => {
     if (!userData) return;
-    const auctionsQuery = query(collection(db, "auctions"), where("status", "in", ["waiting", "active"]));
+    if (classesLoading) return;
+
+    const auctionsQuery = query(
+      collection(db, "auctions"),
+      where("status", "in", ["waiting", "active"])
+    );
+
     const unsubscribe = onSnapshot(auctionsQuery, (snapshot) => {
       let auctions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AuctionItem));
-      if (userData.role === "student") auctions = auctions.filter(a => myClassIds.includes((a as any).classId));
+
+      if (userData.role === "student") {
+        auctions = auctions.filter(a => myClassIds.includes((a as any).classId));
+      }
+
       auctions.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
       setOpenAuctions(auctions);
+    }, (error) => {
+      console.error("경매 로드 오류:", error);
     });
+
     return () => unsubscribe();
-  }, [userData, myClassIds]);
+  }, [userData, myClassIds, classesLoading]);
+
+  const loading = sessionsLoading;
 
   return (
     <div>
@@ -79,12 +130,15 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "1.5rem" }}>
         <div className="card" style={{ borderTop: "4px solid var(--primary)" }}>
           <h3>현재 진행 중인 세션</h3>
           <p style={{ color: "var(--secondary)", fontSize: "0.875rem", marginTop: "0.5rem" }}>지금 참여하여 좌석을 신청할 수 있는 세션들입니다.</p>
           <div style={{ marginTop: "1.5rem" }}>
-            {loading ? <p style={{ textAlign: "center", color: "var(--secondary)" }}>로딩 중...</p> : openSessions.length === 0 ? (
+            {loading ? (
+              <p style={{ textAlign: "center", color: "var(--secondary)" }}>로딩 중...</p>
+            ) : openSessions.length === 0 ? (
               <div style={{ textAlign: "center", color: "var(--secondary)", padding: "1rem" }}>현재 진행 중인 좌석 신청 세션이 없습니다.</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -92,13 +146,21 @@ export default function HomePage() {
                   const isScheduled = session.status === "scheduled";
                   const isLocked = isScheduled && session.scheduledOpenAt && new Date(session.scheduledOpenAt) > now;
                   return (
-                    <button key={session.id} onClick={() => !isLocked && router.push(`/booking/${session.id}`)} disabled={isLocked}
+                    <button key={session.id}
+                      onClick={() => !isLocked && router.push(`/booking/${session.id}`)}
+                      disabled={!!isLocked}
                       style={{ width: "100%", textAlign: "left", padding: "1rem", borderRadius: "8px", border: isLocked ? "1px solid var(--border)" : "1px solid var(--primary)", background: isLocked ? "#f8fafc" : "white", cursor: isLocked ? "not-allowed" : "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", opacity: isLocked ? 0.8 : 1 }}>
                       <div>
                         <span style={{ fontWeight: "600", color: isLocked ? "var(--secondary)" : "var(--primary)" }}>{session.title}</span>
-                        {isLocked && session.scheduledOpenAt && <span style={{ fontSize: "0.9rem", color: "var(--accent)", fontWeight: "bold", display: "block", marginTop: "0.25rem" }}>⏰ {new Date(session.scheduledOpenAt).toLocaleString()} 오픈 예정</span>}
+                        {isLocked && session.scheduledOpenAt && (
+                          <span style={{ fontSize: "0.9rem", color: "var(--accent)", fontWeight: "bold", display: "block", marginTop: "0.25rem" }}>
+                            ⏰ {new Date(session.scheduledOpenAt).toLocaleString()} 오픈 예정
+                          </span>
+                        )}
                       </div>
-                      <span style={{ fontSize: "0.75rem", color: "white", background: isLocked ? "#94a3b8" : "var(--primary)", padding: "2px 8px", borderRadius: "12px" }}>{isLocked ? "대기 중" : "입장하기"}</span>
+                      <span style={{ fontSize: "0.75rem", color: "white", background: isLocked ? "#94a3b8" : "var(--primary)", padding: "2px 8px", borderRadius: "12px" }}>
+                        {isLocked ? "대기 중" : "입장하기"}
+                      </span>
                     </button>
                   );
                 })}
@@ -116,7 +178,8 @@ export default function HomePage() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 {openAuctions.map(auction => (
-                  <button key={auction.id} onClick={() => router.push(`/auction/${auction.id}`)}
+                  <button key={auction.id}
+                    onClick={() => router.push(`/auction/${auction.id}`)}
                     style={{ width: "100%", textAlign: "left", padding: "1rem", borderRadius: "8px", border: "1px solid #7c3aed", background: "white", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <div style={{ fontWeight: "600", color: "#7c3aed" }}>{auction.title}</div>
