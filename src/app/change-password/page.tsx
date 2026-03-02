@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { auth, db } from "@/lib/firebase";
 import { updatePassword } from "firebase/auth";
-import { doc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { doc, updateDoc, setDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
@@ -28,10 +28,24 @@ export default function ChangePasswordPage() {
       if (user) {
         await updatePassword(user, newPw);
 
-        // userData.id가 있으면 그것을 사용 (학번 기반 doc ID)
-        // 없으면 이메일에서 학번 추출
-        const docId = userData?.id || user.email?.replace("@school.com", "") || user.uid;
-        await updateDoc(doc(db, "users", docId), { isFirstLogin: false });
+        // 신뢰성 있는 docId 추출
+        let docId = userData?.id;
+
+        if (!docId && user.email) {
+          // 이메일에서 추출 시도 (예: 30301@school.com -> 30301)
+          const extracted = user.email.replace("@school.com", "").trim();
+          if (extracted) {
+            docId = extracted;
+          }
+        }
+
+        // 그래도 없으면 uid 풀백
+        if (!docId) {
+          docId = user.uid;
+        }
+
+        // updateDoc 대신 setDoc(merge: true)를 사용하여 문서 부재 시 오류 방지 처리
+        await setDoc(doc(db, "users", docId), { isFirstLogin: false }, { merge: true });
 
         router.push("/");
       }
