@@ -5,22 +5,43 @@ import { db } from "@/lib/firebase";
 import { doc, onSnapshot, updateDoc, getDoc } from "firebase/firestore";
 import { useAuth } from "@/context/AuthContext";
 
-interface Bid { amount: number; bidderName: string; bidderId: string; time: string; }
+interface Bid {
+  amount: number;
+  bidderName: string;
+  bidderId: string;
+  time: string;
+}
+
 interface Seat {
-  id: string; label: string; row: number; col: number;
+  id: string;
+  label: string;
+  row: number;
+  col: number;
   bids: { [userId: string]: Bid };
-  topBid: number; topBidder: string | null; topBidderName: string | null;
-  winner: string | null; winnerName: string | null;
+  topBid: number;
+  topBidder: string | null;
+  topBidderName: string | null;
+  winner: string | null;
+  winnerName: string | null;
 }
+
 interface Auction {
-  id: string; title: string; sessionId: string; classId: string; className: string;
+  id: string;
+  title: string;
+  sessionId: string;
+  classId: string;
+  className: string;
   status: "waiting" | "active" | "closed";
-  seats: Seat[]; createdAt: string;
+  seats: Seat[];
+  createdAt: string;
 }
 
-interface Notification { id: number; msg: string; color: string; }
+interface Notification {
+  id: number;
+  msg: string;
+  color: string;
+}
 
-// 입찰금액에 따른 좌석 색상
 function getSeatColor(topBid: number, winner: string | null) {
   if (winner) return { bg: "#ffd700", border: "#f59e0b", glow: "0 0 16px #fbbf24" };
   if (topBid === 0) return { bg: "#f8fafc", border: "#e2e8f0", glow: "none" };
@@ -47,30 +68,29 @@ export default function AuctionPage() {
   const prevSeatsRef = useRef<{ [seatId: string]: number }>({});
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // 팝업 알림 추가
   const addNotif = useCallback((msg: string, color = "#7c3aed") => {
     const id = ++notifIdRef.current;
     setNotifications(prev => [...prev.slice(-4), { id, msg, color }]);
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
   }, []);
 
-  // 비프음 재생
   const playBidSound = useCallback((freq = 880) => {
     try {
       if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       const ctx = audioCtxRef.current;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
       osc.frequency.value = freq;
       osc.type = "sine";
       gain.gain.setValueAtTime(0.3, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.3);
     } catch (e) {}
   }, []);
 
-  // 낙찰 효과음
   const playWinSound = useCallback(() => {
     try {
       if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -78,8 +98,10 @@ export default function AuctionPage() {
       [523, 659, 784, 1047].forEach((freq, i) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = freq; osc.type = "sine";
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = freq;
+        osc.type = "sine";
         gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.12);
         gain.gain.setValueAtTime(0.25, ctx.currentTime + i * 0.12 + 0.01);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.35);
@@ -89,14 +111,11 @@ export default function AuctionPage() {
     } catch (e) {}
   }, []);
 
-  // 경매 실시간 구독
   useEffect(() => {
     const ref = doc(db, "auctions", auctionId);
     const unsub = onSnapshot(ref, (snap) => {
       if (!snap.exists()) { setLoading(false); return; }
       const data = { id: snap.id, ...snap.data() } as Auction;
-
-      // 새 입찰 감지 → 알림 + 소리
       if (data.seats && prevSeatsRef.current) {
         data.seats.forEach(seat => {
           const prevTop = prevSeatsRef.current[seat.id] ?? 0;
@@ -107,7 +126,7 @@ export default function AuctionPage() {
               seat.topBid >= 2000 ? "#ef4444" : seat.topBid >= 1000 ? "#f97316" : "#7c3aed"
             );
           }
-          if (seat.winner && !prevSeatsRef.current[`w_${seat.id}`]) {
+          if (seat.winner && !(prevSeatsRef.current as any)[`w_${seat.id}`]) {
             playWinSound();
             addNotif(`🏆 ${seat.label}번 자리 낙찰! → ${seat.winnerName}님`, "#f59e0b");
             (prevSeatsRef.current as any)[`w_${seat.id}`] = 1;
@@ -121,7 +140,6 @@ export default function AuctionPage() {
     return () => unsub();
   }, [auctionId, addNotif, playBidSound, playWinSound]);
 
-  // 입찰하기
   const handleBid = async (seat: Seat) => {
     if (!userData) return;
     const amount = bidAmounts[seat.id] || 0;
@@ -129,7 +147,6 @@ export default function AuctionPage() {
     if (amount > (userData.points ?? 0)) { addNotif("포인트가 부족합니다!", "#ef4444"); return; }
     if (amount <= seat.topBid) { addNotif(`현재 최고가(${seat.topBid.toLocaleString()}P)보다 높게 입찰해야 합니다.`, "#ef4444"); return; }
     if (seat.winner) { addNotif("이미 낙찰된 자리입니다.", "#ef4444"); return; }
-
     setSubmitting(seat.id);
     try {
       const aRef = doc(db, "auctions", auctionId);
@@ -138,8 +155,12 @@ export default function AuctionPage() {
       const cur = snap.data() as Auction;
       const updatedSeats = cur.seats.map(s => {
         if (s.id !== seat.id) return s;
-        const newBids = { ...s.bids, [userData.id]: { amount, bidderName: userData.name, bidderId: userData.id, time: new Date().toISOString() } };
-        const topEntry = Object.values(newBids).reduce((a, b) => a.amount >= b.amount ? a : b);
+        const newBids: { [userId: string]: Bid } = {
+          ...s.bids,
+          [userData.id]: { amount, bidderName: userData.name, bidderId: userData.id, time: new Date().toISOString() }
+        };
+        const bidValues = Object.values(newBids) as Bid[];
+        const topEntry = bidValues.reduce((a: Bid, b: Bid) => a.amount >= b.amount ? a : b);
         return { ...s, bids: newBids, topBid: topEntry.amount, topBidder: topEntry.bidderId, topBidderName: topEntry.bidderName };
       });
       await updateDoc(aRef, { seats: updatedSeats });
@@ -152,7 +173,6 @@ export default function AuctionPage() {
     }
   };
 
-  // 낙찰 처리 (관리자)
   const handleSettle = async (seat: Seat) => {
     if (!seat.topBidder) { alert("입찰자가 없습니다."); return; }
     if (!confirm(`${seat.label}번 자리를 ${seat.topBidderName}님(${seat.topBid.toLocaleString()}P)께 낙찰하시겠습니까?`)) return;
@@ -161,60 +181,41 @@ export default function AuctionPage() {
       const snap = await getDoc(aRef);
       if (!snap.exists()) return;
       const cur = snap.data() as Auction;
-      const updatedSeats = cur.seats.map(s => {
-        if (s.id !== seat.id) return s;
-        return { ...s, winner: s.topBidder, winnerName: s.topBidderName };
-      });
+      const updatedSeats = cur.seats.map(s => s.id !== seat.id ? s : { ...s, winner: s.topBidder, winnerName: s.topBidderName });
       await updateDoc(aRef, { seats: updatedSeats });
-
-      // 낙찰자 포인트 차감
       const userRef = doc(db, "users", seat.topBidder!);
       const userSnap = await getDoc(userRef);
       if (userSnap.exists()) {
-        const cur = userSnap.data().points ?? 0;
-        await updateDoc(userRef, { points: Math.max(0, cur - seat.topBid) });
+        const pts = userSnap.data().points ?? 0;
+        await updateDoc(userRef, { points: Math.max(0, pts - seat.topBid) });
       }
       addNotif(`🏆 ${seat.label}번 낙찰! ${seat.topBidderName}님 -${seat.topBid.toLocaleString()}P`, "#f59e0b");
-    } catch (e) {
-      alert("오류가 발생했습니다.");
-    }
+    } catch (e) { alert("오류가 발생했습니다."); }
   };
 
   if (loading) return <div className="card" style={{ textAlign: "center", padding: "3rem" }}>경매 정보를 불러오는 중...</div>;
   if (!auction) return <div className="card">경매를 찾을 수 없습니다.</div>;
 
-  // 그리드 사이즈 계산
   const maxRow = Math.max(...auction.seats.map(s => s.row), 0) + 1;
   const maxCol = Math.max(...auction.seats.map(s => s.col), 0) + 1;
   const seatMap: { [key: string]: Seat } = {};
   auction.seats.forEach(s => { seatMap[`${s.row}-${s.col}`] = s; });
-
-  const myBid = (seat: Seat) => seat.bids?.[userData?.id]?.amount ?? 0;
+  const myBid = (seat: Seat) => seat.bids?.[userData?.id ?? ""]?.amount ?? 0;
   const isTopBidder = (seat: Seat) => seat.topBidder === userData?.id;
 
   return (
     <div style={{ minHeight: "100vh", background: "#0f172a", color: "white", padding: "1.5rem", position: "relative", overflow: "hidden" }}>
-      {/* 팝업 알림 */}
       <div style={{ position: "fixed", top: "1rem", right: "1rem", zIndex: 9999, display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "360px" }}>
         {notifications.map(n => (
-          <div key={n.id} style={{
-            background: n.color, color: "white", padding: "0.75rem 1rem", borderRadius: "12px",
-            fontWeight: "bold", fontSize: "0.9rem", boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
-            animation: "slideIn 0.3s ease",
-          }}>
-            {n.msg}
-          </div>
+          <div key={n.id} style={{ background: n.color, color: "white", padding: "0.75rem 1rem", borderRadius: "12px", fontWeight: "bold", fontSize: "0.9rem", boxShadow: "0 4px 20px rgba(0,0,0,0.4)", animation: "slideIn 0.3s ease" }}>{n.msg}</div>
         ))}
       </div>
-
-      <style>{
-        `@keyframes slideIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-         @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.04); } }
-         .seat-btn { transition: all 0.25s ease; }
-         .seat-btn:hover { transform: scale(1.05); }`
-      }</style>
-
-      {/* 헤더 */}
+      <style>{`
+        @keyframes slideIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+        .seat-btn { transition: all 0.25s ease; }
+        .seat-btn:hover { transform: scale(1.05); }
+      `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
         <div>
           <button onClick={() => router.back()} style={{ background: "rgba(255,255,255,0.1)", border: "none", color: "white", padding: "0.4rem 0.8rem", borderRadius: "8px", cursor: "pointer", marginRight: "1rem" }}>← 뒤로</button>
@@ -226,82 +227,42 @@ export default function AuctionPage() {
         {!isTeacher && (
           <div style={{ background: "rgba(255,255,255,0.1)", padding: "0.5rem 1.2rem", borderRadius: "12px", textAlign: "right" }}>
             <div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>내 포인트</div>
-            <div style={{ fontSize: "1.3rem", fontWeight: "bold", color: "#fbbf24" }}>
-              💰 {(userData?.points ?? 0).toLocaleString()}P
-            </div>
+            <div style={{ fontSize: "1.3rem", fontWeight: "bold", color: "#fbbf24" }}>💰 {(userData?.points ?? 0).toLocaleString()}P</div>
           </div>
         )}
       </div>
-
-      {/* 좌석 그리드 */}
       <div style={{ overflowX: "auto" }}>
         <div style={{ display: "inline-grid", gridTemplateColumns: `repeat(${maxCol}, minmax(110px, 1fr))`, gap: "0.75rem", minWidth: "min-content" }}>
           {Array.from({ length: maxRow }, (_, row) =>
             Array.from({ length: maxCol }, (_, col) => {
               const seat = seatMap[`${row}-${col}`];
               if (!seat) return <div key={`${row}-${col}`} style={{ width: 110, height: 150 }} />;
-
               const color = getSeatColor(seat.topBid, seat.winner);
               const mine = isTopBidder(seat);
               const settled = !!seat.winner;
-
               return (
-                <div key={seat.id} className="seat-btn" style={{
-                  background: color.bg, border: `2px solid ${color.border}`,
-                  borderRadius: "12px", padding: "0.7rem 0.5rem",
-                  boxShadow: color.glow !== "none" ? color.glow : mine ? "0 0 0 3px #22c55e" : "none",
-                  animation: mine && !settled ? "pulse 1.5s infinite" : "none",
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem",
-                  minHeight: 150, position: "relative",
-                }}>
-                  {settled && (
-                    <div style={{ position: "absolute", top: 4, right: 6, fontSize: "0.7rem", background: "#ffd700", color: "#92400e", borderRadius: "6px", padding: "1px 6px", fontWeight: "bold" }}>
-                      낙찰
-                    </div>
-                  )}
+                <div key={seat.id} className="seat-btn" style={{ background: color.bg, border: `2px solid ${color.border}`, borderRadius: "12px", padding: "0.7rem 0.5rem", boxShadow: color.glow !== "none" ? color.glow : mine ? "0 0 0 3px #22c55e" : "none", animation: mine && !settled ? "pulse 1.5s infinite" : "none", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem", minHeight: 150, position: "relative" }}>
+                  {settled && <div style={{ position: "absolute", top: 4, right: 6, fontSize: "0.7rem", background: "#ffd700", color: "#92400e", borderRadius: "6px", padding: "1px 6px", fontWeight: "bold" }}>낙찰</div>}
                   <div style={{ fontWeight: "bold", fontSize: "1rem", color: "#1e293b" }}>{seat.label}번</div>
                   <div style={{ fontSize: "0.95rem", fontWeight: "bold", color: seat.topBid > 0 ? "#7c3aed" : "#94a3b8" }}>
                     {seat.topBid > 0 ? `${seat.topBid.toLocaleString()}P` : "시작가 0P"}
                   </div>
                   {seat.winner ? (
-                    <div style={{ fontSize: "0.8rem", color: "#92400e", fontWeight: "bold", textAlign: "center" }}>
-                      🏆 {seat.winnerName}
-                    </div>
+                    <div style={{ fontSize: "0.8rem", color: "#92400e", fontWeight: "bold", textAlign: "center" }}>🏆 {seat.winnerName}</div>
                   ) : seat.topBidderName ? (
-                    <div style={{ fontSize: "0.75rem", color: "#64748b", textAlign: "center" }}>
-                      {mine ? "🟢 내가 최고" : `최고: ${seat.topBidderName}`}
-                    </div>
+                    <div style={{ fontSize: "0.75rem", color: "#64748b", textAlign: "center" }}>{mine ? "🟢 내가 최고" : `최고: ${seat.topBidderName}`}</div>
                   ) : null}
-                  {myBid(seat) > 0 && !seat.winner && (
-                    <div style={{ fontSize: "0.7rem", color: "#64748b" }}>내 입찰: {myBid(seat).toLocaleString()}P</div>
-                  )}
-
+                  {myBid(seat) > 0 && !seat.winner && <div style={{ fontSize: "0.7rem", color: "#64748b" }}>내 입찰: {myBid(seat).toLocaleString()}P</div>}
                   {!isTeacher && !settled && auction.status === "active" && (
                     <div style={{ display: "flex", gap: "2px", width: "100%", marginTop: "0.3rem" }}>
-                      <input
-                        type="number"
-                        min={seat.topBid + 1}
-                        value={bidAmounts[seat.id] || ""}
-                        onChange={(e) => setBidAmounts(prev => ({ ...prev, [seat.id]: parseInt(e.target.value) || 0 }))}
-                        placeholder={(seat.topBid + 100).toString()}
-                        style={{ flex: 1, padding: "3px 4px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "0.75rem", width: 0 }}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <button
-                        onClick={() => handleBid(seat)}
-                        disabled={submitting === seat.id}
-                        style={{ background: "#7c3aed", color: "white", border: "none", padding: "3px 7px", borderRadius: "6px", cursor: "pointer", fontSize: "0.75rem", fontWeight: "bold", opacity: submitting === seat.id ? 0.6 : 1 }}
-                      >
+                      <input type="number" min={seat.topBid + 1} value={bidAmounts[seat.id] || ""} onChange={(e) => setBidAmounts(prev => ({ ...prev, [seat.id]: parseInt(e.target.value) || 0 }))} placeholder={(seat.topBid + 100).toString()} style={{ flex: 1, padding: "3px 4px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "0.75rem", width: 0 }} onClick={(e) => e.stopPropagation()} />
+                      <button onClick={() => handleBid(seat)} disabled={submitting === seat.id} style={{ background: "#7c3aed", color: "white", border: "none", padding: "3px 7px", borderRadius: "6px", cursor: "pointer", fontSize: "0.75rem", fontWeight: "bold", opacity: submitting === seat.id ? 0.6 : 1 }}>
                         {submitting === seat.id ? "..." : "입찰"}
                       </button>
                     </div>
                   )}
-
                   {isTeacher && !settled && seat.topBidder && (
-                    <button
-                      onClick={() => handleSettle(seat)}
-                      style={{ marginTop: "0.3rem", background: "#f59e0b", color: "white", border: "none", padding: "4px 10px", borderRadius: "8px", cursor: "pointer", fontSize: "0.8rem", fontWeight: "bold", width: "100%" }}
-                    >
+                    <button onClick={() => handleSettle(seat)} style={{ marginTop: "0.3rem", background: "#f59e0b", color: "white", border: "none", padding: "4px 10px", borderRadius: "8px", cursor: "pointer", fontSize: "0.8rem", fontWeight: "bold", width: "100%" }}>
                       🔨 낙찰
                     </button>
                   )}
@@ -311,8 +272,6 @@ export default function AuctionPage() {
           )}
         </div>
       </div>
-
-      {/* 입찰 현황 테이블 (관리자) */}
       {isTeacher && (
         <div style={{ marginTop: "2rem", background: "rgba(255,255,255,0.05)", borderRadius: "12px", padding: "1.5rem" }}>
           <h3 style={{ marginBottom: "1rem" }}>📊 입찰 현황</h3>
@@ -331,18 +290,11 @@ export default function AuctionPage() {
                 {[...auction.seats].sort((a, b) => b.topBid - a.topBid).map(seat => (
                   <tr key={seat.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                     <td style={{ padding: "0.5rem", fontWeight: "bold" }}>{seat.label}번</td>
-                    <td style={{ padding: "0.5rem", textAlign: "right", color: seat.topBid > 0 ? "#fbbf24" : "#64748b" }}>
-                      {seat.topBid > 0 ? `${seat.topBid.toLocaleString()}P` : "-"}
-                    </td>
+                    <td style={{ padding: "0.5rem", textAlign: "right", color: seat.topBid > 0 ? "#fbbf24" : "#64748b" }}>{seat.topBid > 0 ? `${seat.topBid.toLocaleString()}P` : "-"}</td>
                     <td style={{ padding: "0.5rem", color: "#94a3b8" }}>{seat.topBidderName || "-"}</td>
                     <td style={{ padding: "0.5rem", textAlign: "center" }}>{Object.keys(seat.bids || {}).length}</td>
                     <td style={{ padding: "0.5rem", textAlign: "center" }}>
-                      {seat.winner
-                        ? <span style={{ color: "#fbbf24", fontWeight: "bold" }}>🏆 낙찰</span>
-                        : seat.topBidder
-                        ? <span style={{ color: "#22c55e" }}>입찰 중</span>
-                        : <span style={{ color: "#64748b" }}>-</span>
-                      }
+                      {seat.winner ? <span style={{ color: "#fbbf24", fontWeight: "bold" }}>🏆 낙찰</span> : seat.topBidder ? <span style={{ color: "#22c55e" }}>입찰 중</span> : <span style={{ color: "#64748b" }}>-</span>}
                     </td>
                   </tr>
                 ))}
