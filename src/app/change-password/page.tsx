@@ -19,8 +19,8 @@ export default function ChangePasswordPage() {
       setError("비밀번호가 일치하지 않습니다.");
       return;
     }
-    if (newPw.length < 4) {
-      setError("비밀번호는 4자 이상이어야 합니다.");
+    if (newPw.length < 6) {
+      setError("비밀번호는 6자 이상이어야 합니다.");
       return;
     }
     try {
