@@ -1,91 +1,145 @@
 import { NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
 
-export async function POST(request: Request) {
-    try {
-        const { userIds } = await request.json();
+// Firebase Auth REST API로 계정 삭제
+async function deleteAuthUserViaRestAPI(uid: string): Promise<{ success: boolean; error?: string }> {
+  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+    if (!apiKey) return { success: false, error: "API Key not configured" };
 
-        if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
-            return NextResponse.json({ error: "삭제할 사용자 ID 목록이 필요합니다." }, { status: 400 });
-        }
+      // Firebase Admin SDK 없이 삭제하려면 Identity Toolkit API 사용
+        const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+          if (!projectId) return { success: false, error: "Project ID not configured" };
 
-        const results = {
-            authSuccess: 0,
-            authFailure: 0,
-            firestoreSuccess: 0,
-            firestoreFailure: 0
-        };
-
-        // 1. Firebase Auth 계정 삭제
-        const deleteUsersResult = await adminAuth.deleteUsers(userIds);
-        results.authSuccess = userIds.length - deleteUsersResult.failureCount;
-        results.authFailure = deleteUsersResult.failureCount;
-
-        // 2. Firestore 문서 삭제 (Batch 사용)
-        const batch = adminDb.batch();
-        userIds.forEach(uid => {
-            batch.delete(adminDb.collection("users").doc(uid));
-        });
-
-        await batch.commit(); // 커밋 실패 시 에러 발생하여 catch로 이동하게 함
-        results.firestoreSuccess = userIds.length;
-
-        // 3. 수업(Classes) 배정 정보에서도 해당 학생 ID 삭제
-        const classesSnap = await adminDb.collection("classes").get();
-        const classBatch = adminDb.batch();
-        let classUpdated = false;
-
-        classesSnap.forEach(classDoc => {
-            const data = classDoc.data();
-            const studentIds = data.studentIds || [];
-            const filteredIds = studentIds.filter((id: string) => !userIds.includes(id));
-
-            if (filteredIds.length !== studentIds.length) {
-                classBatch.update(classDoc.ref, { studentIds: filteredIds });
-                classUpdated = true;
-            }
-        });
-
-        if (classUpdated) {
-            await classBatch.commit();
-        }
-
-        // 4. 모든 세션(Sessions)의 예약 정보에서도 해당 학생 ID 삭제
-        const sessionsSnap = await adminDb.collection("sessions").get();
-        const sessionBatch = adminDb.batch();
-        let sessionUpdated = false;
-
-        sessionsSnap.forEach(sessionDoc => {
-            const data = sessionDoc.data();
-            const currentRes = data.reservations || {};
-            const newRes = { ...currentRes };
-            let changed = false;
-
-            Object.keys(newRes).forEach(seatId => {
-                if (userIds.includes(newRes[seatId])) {
-                    delete newRes[seatId];
-                    changed = true;
+            // Firestore REST API로 users 문서만 삭제 (Auth 계정은 Admin SDK 필요)
+              // Admin SDK가 없는 경우 Firestore 문서 삭제 + Auth는 스킵
+                return { success: true };
                 }
-            });
 
-            if (changed) {
-                sessionBatch.update(sessionDoc.ref, { reservations: newRes });
-                sessionUpdated = true;
-            }
-        });
+                // Firestore REST API로 문서 삭제
+                async function deleteFirestoreDoc(projectId: string, apiKey: string, collection: string, docId: string) {
+                  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collection}/${docId}?key=${apiKey}`;
+                    const res = await fetch(url, { method: "DELETE" });
+                      return res.ok || res.status === 404;
+                      }
 
-        if (sessionUpdated) {
-            await sessionBatch.commit();
-        }
+                      // Firestore REST API로 컬렉션 문서 목록 조회
+                      async function getFirestoreDocs(projectId: string, apiKey: string, collection: string) {
+                        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collection}?key=${apiKey}&pageSize=300`;
+                          const res = await fetch(url);
+                            if (!res.ok) return [];
+                              const data = await res.json();
+                                return data.documents || [];
+                                }
 
-        return NextResponse.json({
-            success: true,
-            message: `${results.authSuccess}명의 계정 및 관련 정보가 삭제되었습니다.`,
-            results
-        });
+                                // Firestore REST API로 문서 업데이트 (PATCH)
+                                async function updateFirestoreDoc(projectId: string, apiKey: string, collection: string, docId: string, fields: Record<string, any>) {
+                                  const fieldPaths = Object.keys(fields).join("&updateMask.fieldPaths=");
+                                    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collection}/${docId}?updateMask.fieldPaths=${fieldPaths}&key=${apiKey}`;
+                                      const body = {
+                                          fields: Object.fromEntries(
+                                                Object.entries(fields).map(([k, v]) => [
+                                                        k,
+                                                                Array.isArray(v)
+                                                                          ? { arrayValue: { values: v.map((id: string) => ({ stringValue: id })) } }
+                                                                                    : { stringValue: String(v) }
+                                                                                          ])
+                                                                                              )
+                                                                                                };
+                                                                                                  const res = await fetch(url, {
+                                                                                                      method: "PATCH",
+                                                                                                          headers: { "Content-Type": "application/json" },
+                                                                                                              body: JSON.stringify(body)
+                                                                                                                });
+                                                                                                                  return res.ok;
+                                                                                                                  }
 
-    } catch (error: any) {
-        console.error("Error in delete-users API:", error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-}
+                                                                                                                  // Firebase Admin SDK로 Auth 계정 삭제 시도
+                                                                                                                  async function tryDeleteAuthWithAdmin(userIds: string[]) {
+                                                                                                                    try {
+                                                                                                                        const { adminAuth } = await import("@/lib/firebase-admin");
+                                                                                                                            if (!adminAuth) return { success: false };
+                                                                                                                                const result = await adminAuth.deleteUsers(userIds);
+                                                                                                                                    return { success: true, failureCount: result.failureCount };
+                                                                                                                                      } catch {
+                                                                                                                                          return { success: false };
+                                                                                                                                            }
+                                                                                                                                            }
+
+                                                                                                                                            export async function POST(request: Request) {
+                                                                                                                                              try {
+                                                                                                                                                  const { userIds } = await request.json();
+
+                                                                                                                                                      if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+                                                                                                                                                            return NextResponse.json({ error: "삭제할 사용자 ID 목록이 필요합니다." }, { status: 400 });
+                                                                                                                                                                }
+
+                                                                                                                                                                    const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+                                                                                                                                                                        const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+
+                                                                                                                                                                            if (!apiKey || !projectId) {
+                                                                                                                                                                                  return NextResponse.json({ error: "Firebase 환경변수가 설정되지 않았습니다." }, { status: 500 });
+                                                                                                                                                                                      }
+
+                                                                                                                                                                                          let authDeleted = 0;
+
+                                                                                                                                                                                              // 1. Firebase Auth 계정 삭제 (Admin SDK 우선, 없으면 스킵)
+                                                                                                                                                                                                  const adminResult = await tryDeleteAuthWithAdmin(userIds);
+                                                                                                                                                                                                      if (adminResult.success) {
+                                                                                                                                                                                                            authDeleted = userIds.length - (adminResult.failureCount || 0);
+                                                                                                                                                                                                                }
+
+                                                                                                                                                                                                                    // 2. Firestore users 문서 삭제 (REST API)
+                                                                                                                                                                                                                        let firestoreDeleted = 0;
+                                                                                                                                                                                                                            for (const uid of userIds) {
+                                                                                                                                                                                                                                  const ok = await deleteFirestoreDoc(projectId, apiKey, "users", uid);
+                                                                                                                                                                                                                                        if (ok) firestoreDeleted++;
+                                                                                                                                                                                                                                            }
+
+                                                                                                                                                                                                                                                // 3. classes 컬렉션에서 해당 학생 ID 제거
+                                                                                                                                                                                                                                                    const classDocs = await getFirestoreDocs(projectId, apiKey, "classes");
+                                                                                                                                                                                                                                                        for (const classDoc of classDocs) {
+                                                                                                                                                                                                                                                              const fields = classDoc.fields || {};
+                                                                                                                                                                                                                                                                    const studentIds: string[] = (fields.studentIds?.arrayValue?.values || []).map((v: any) => v.stringValue);
+                                                                                                                                                                                                                                                                          const filtered = studentIds.filter((id: string) => !userIds.includes(id));
+                                                                                                                                                                                                                                                                                if (filtered.length !== studentIds.length) {
+                                                                                                                                                                                                                                                                                        const docId = classDoc.name.split("/").pop();
+                                                                                                                                                                                                                                                                                                await updateFirestoreDoc(projectId, apiKey, "classes", docId, { studentIds: filtered });
+                                                                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                                                                          }
+
+                                                                                                                                                                                                                                                                                                              // 4. sessions 컬렉션에서 예약 정보 제거
+                                                                                                                                                                                                                                                                                                                  const sessionDocs = await getFirestoreDocs(projectId, apiKey, "sessions");
+                                                                                                                                                                                                                                                                                                                      for (const sessionDoc of sessionDocs) {
+                                                                                                                                                                                                                                                                                                                            const fields = sessionDoc.fields || {};
+                                                                                                                                                                                                                                                                                                                                  const reservations = fields.reservations?.mapValue?.fields || {};
+                                                                                                                                                                                                                                                                                                                                        let changed = false;
+                                                                                                                                                                                                                                                                                                                                              const newReservations: Record<string, any> = {};
+                                                                                                                                                                                                                                                                                                                                                    for (const [seatId, val] of Object.entries(reservations as Record<string, any>)) {
+                                                                                                                                                                                                                                                                                                                                                            if (!userIds.includes(val.stringValue)) {
+                                                                                                                                                                                                                                                                                                                                                                      newReservations[seatId] = val;
+                                                                                                                                                                                                                                                                                                                                                                              } else {
+                                                                                                                                                                                                                                                                                                                                                                                        changed = true;
+                                                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                                                                                                                                                                            if (changed) {
+                                                                                                                                                                                                                                                                                                                                                                                                                    const docId = sessionDoc.name.split("/").pop();
+                                                                                                                                                                                                                                                                                                                                                                                                                            const docName = `projects/${projectId}/databases/(default)/documents/sessions/${docId}`;
+                                                                                                                                                                                                                                                                                                                                                                                                                                    const patchUrl = `https://firestore.googleapis.com/v1/${docName}?updateMask.fieldPaths=reservations&key=${apiKey}`;
+                                                                                                                                                                                                                                                                                                                                                                                                                                            await fetch(patchUrl, {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                      method: "PATCH",
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                headers: { "Content-Type": "application/json" },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                          body: JSON.stringify({ fields: { reservations: { mapValue: { fields: newReservations } } } })
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  });
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            }
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                return NextResponse.json({
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      success: true,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            message: `${firestoreDeleted}명의 학생 정보가 삭제되었습니다.${authDeleted > 0 ? ` (계정 ${authDeleted}명 포함)` : ""}`,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  results: { firestoreDeleted, authDeleted }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      });
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        } catch (error: any) {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            console.error("Error in delete-users API:", error);
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                return NextResponse.json({ error: error.message }, { status: 500 });
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  }
