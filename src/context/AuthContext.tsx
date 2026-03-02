@@ -26,7 +26,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
-      setLoading(false);
+      if (!firebaseUser) {
+        setUserData(null);
+        setLoading(false);
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -35,21 +38,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) {
       setUserData(null);
+      setLoading(false);
       return;
     }
+
     const docRef = doc(db, "users", user.uid);
     const unsubUser = onSnapshot(docRef, async (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        // id 필드 포함 (Firestore doc id를 userData.id로 사용)
+        const fullData = { id: snap.id, ...data };
+
         // 포인트가 없는 경우 초기화 (10,000P)
         if (data.points === undefined || data.points === null) {
           await updateDoc(docRef, { points: 10000 });
-          setUserData({ ...data, points: 10000 });
+          setUserData({ ...fullData, points: 10000 });
         } else {
-          setUserData(data);
+          setUserData(fullData);
         }
+      } else {
+        setUserData(null);
       }
+      setLoading(false);
+    }, (error) => {
+      console.error("사용자 데이터 로드 오류:", error);
+      setLoading(false);
     });
+
     return () => unsubUser();
   }, [user]);
 
