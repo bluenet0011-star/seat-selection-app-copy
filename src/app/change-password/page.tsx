@@ -37,7 +37,8 @@ export default function ChangePasswordPage() {
       }
     } catch (err: any) {
       console.error("비밀번호 변경 오류:", err);
-      setError("비밀번호 변경 중 오류가 발생했습니다. 다시 시도해주세요.");
+      // 🔥 Update to show actual error message for debugging
+      setError("비밀번호 변경 중 오류가 발생했습니다: " + (err.message || err.toString()));
     }
   };
 
