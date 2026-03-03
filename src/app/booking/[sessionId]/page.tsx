@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, use, useRef } from "react";
 import { db, auth } from "@/lib/firebase";
 import { doc, onSnapshot, updateDoc, runTransaction, getDoc, getDocs, collection, query, where } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import confetti from "canvas-confetti";
+import toast, { Toaster } from "react-hot-toast";
+import { Howl } from "howler";
 
 interface Seat {
     id: string;
@@ -34,6 +37,20 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
 
     const { userData } = useAuth();
 
+    // 이전 상태 추적용 ref (효과 발생용)
+    const prevBidsRef = useRef<Record<string, any>>({});
+    const prevResRef = useRef<Record<string, string>>({});
+    const soundsRef = useRef<{ bid?: Howl, outbid?: Howl, award?: Howl }>({});
+
+    // 효과음 초기화
+    useEffect(() => {
+        soundsRef.current = {
+            bid: new Howl({ src: ['https://actions.google.com/sounds/v1/cartoon/pop.ogg'], volume: 0.5 }),
+            outbid: new Howl({ src: ['https://actions.google.com/sounds/v1/alarms/buzzer_alarm.ogg'], volume: 0.3 }),
+            award: new Howl({ src: ['https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg'], volume: 0.6 })
+        };
+    }, []);
+
     useEffect(() => {
         if (!sessionId) return;
 
@@ -41,9 +58,59 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         const unsubscribe = onSnapshot(sessionRef, async (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
+                const currentUserData = auth.currentUser;
+                const activeUid = currentUserData?.uid; // or userData?.id depending on context, we'll try to find it
+                const myId = activeUid || "";
+
+                // --- 이벤트 감지 및 효과 트리거 ---
+                const oldBids = prevBidsRef.current;
+                const newBids = data.bids || {};
+                const oldRes = prevResRef.current;
+                const newRes = data.reservations || {};
+
+                // 1. 낙찰 감지 (새로운 reservation 추가됨)
+                Object.keys(newRes).forEach(seatId => {
+                    if (!oldRes[seatId]) {
+                        // 새로운 낙찰 발생!
+                        if (soundsRef.current.award) soundsRef.current.award.play();
+                        confetti({
+                            particleCount: 100,
+                            spread: 70,
+                            origin: { y: 0.6 }
+                        });
+                        toast.success(`좌석 낙찰 완료!`, { icon: '🎉' });
+                    }
+                });
+
+                // 2. 입찰 감지 및 상위 입찰 추월(Outbid) 감지
+                Object.keys(newBids).forEach(seatId => {
+                    const oldBid = oldBids[seatId];
+                    const newBid = newBids[seatId];
+
+                    if (!oldBid && newBid) {
+                        // 완전히 새로운 입찰
+                        if (soundsRef.current.bid) soundsRef.current.bid.play();
+                        toast(`${newBid.name}님이 ${newBid.points}P 입찰!`, { icon: '💰' });
+                    } else if (oldBid && newBid && newBid.points > oldBid.points) {
+                        // 누군가 이전 입찰을 덮어씀 (갱신됨)
+                        if (soundsRef.current.bid) soundsRef.current.bid.play();
+                        toast(`${newBid.name}님이 ${newBid.points}P로 최고 입찰 갱신!`, { icon: '🔥' });
+
+                        // 만약 밀려난 사람이 '나'라면 알림 및 효과음
+                        if (oldBid.uid === myId && newBid.uid !== myId) {
+                            if (soundsRef.current.outbid) soundsRef.current.outbid.play();
+                            toast.error("다른 학생이 더 높은 포인트를 입찰했습니다!", { duration: 4000 });
+                        }
+                    }
+                });
+
+                // ref 업데이트
+                prevBidsRef.current = newBids;
+                prevResRef.current = newRes;
+
                 setLayout(data.layout || []);
-                setReservations(data.reservations || {});
-                setBids(data.bids || {});
+                setReservations(newRes);
+                setBids(newBids);
                 setClassId(data.classId);
 
                 // 상시 오픈이 아닌 경우 시간 체크
@@ -95,6 +162,13 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         if (userData?.role === 'teacher') return;
         if (reservations[seatId]) return; // 이미 확정된 자리
 
+        // 낙찰된 학생은 추가 입찰 불가
+        const isAlreadyAwarded = Object.values(reservations).includes(userData?.id);
+        if (isAlreadyAwarded) {
+            alert("이미 좌석이 배정되어 추가 입찰이 불가능합니다.");
+            return;
+        }
+
         const seat = layout.find(s => s.id === seatId);
         if (seat) {
             setSelectedSeatForBid(seat);
@@ -127,6 +201,11 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
 
                 if (currentRes[seatId]) {
                     throw "이미 낙찰된 좌석입니다.";
+                }
+
+                const isAlreadyAwarded = Object.values(currentRes).includes(userData.id);
+                if (isAlreadyAwarded) {
+                    throw "이미 다른 좌석에 배정되어 입찰할 수 없습니다.";
                 }
 
                 if (currentBids[seatId] && currentBids[seatId].points >= amount) {
@@ -276,6 +355,7 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
 
     return (
         <div className="container" style={{ display: 'flex', flexDirection: isTeacher ? 'row' : 'column', gap: '2rem', alignItems: 'flex-start' }}>
+            <Toaster position="bottom-right" />
             <div style={{ flex: 1, width: '100%' }}>
                 <div className="card" style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
                     <h2 style={{ color: 'var(--primary)' }}>좌석 신청 및 배정 현황</h2>
@@ -469,8 +549,13 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                                     boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
                                 }}
                             >
-                                <span style={{ fontWeight: 'bold' }}>{student.name}</span>
-                                <span style={{ color: 'var(--secondary)', fontSize: '0.75rem' }}>{student.id}</span>
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ fontWeight: 'bold' }}>{student.name}</span>
+                                    <span style={{ color: 'var(--secondary)', fontSize: '0.75rem' }}>{student.id}</span>
+                                </div>
+                                <span style={{ fontWeight: 'bold', color: 'var(--primary)', fontSize: '0.85rem' }}>
+                                    {(student.points || 0).toLocaleString()}P
+                                </span>
                             </div>
                         ))}
                         {unassignedStudents.length === 0 && (
