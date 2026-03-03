@@ -4,6 +4,7 @@ import { useState, useEffect, use } from "react";
 import { db, auth } from "@/lib/firebase";
 import { doc, onSnapshot, updateDoc, runTransaction, getDoc, getDocs, collection, query, where } from "firebase/firestore";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
 
 interface Seat {
     id: string;
@@ -28,21 +29,10 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
     const [studentsMap, setStudentsMap] = useState<Record<string, { id: string, name: string }>>({});
     const [unassignedStudents, setUnassignedStudents] = useState<any[]>([]);
     const [columnGaps, setColumnGaps] = useState<number[]>([]);
-    const [userData, setUserData] = useState<any>(null);
     const [classId, setClassId] = useState("");
     const [accessError, setAccessError] = useState("");
 
-    // 내 정보 및 권한 확인
-    useEffect(() => {
-        const fetchMe = async () => {
-            const user = auth.currentUser;
-            if (user) {
-                const snap = await getDoc(doc(db, "users", user.uid));
-                if (snap.exists()) setUserData(snap.data());
-            }
-        };
-        fetchMe();
-    }, []);
+    const { userData } = useAuth();
 
     useEffect(() => {
         if (!sessionId) return;
