@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { db } from "@/lib/firebase";
 import { collection, addDoc, getDocs, query, where, writeBatch, doc, setDoc, updateDoc, onSnapshot, orderBy } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import Link from "next/link";
 
 interface Student {
     id: string;
@@ -296,7 +297,12 @@ export default function StudentManagement() {
 
     return (
         <div className="card">
-            <h2>학생 명단 관리</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <h2 style={{ margin: 0 }}>학생 명단 관리</h2>
+                <Link href="/admin/users" style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>💰</span> 학생 포인트 관리 (부여/차감) 하기
+                </Link>
+            </div>
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
                 <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />
                 <button onClick={downloadTemplate} className="btn-outline">📄 양식 다운로드</button>

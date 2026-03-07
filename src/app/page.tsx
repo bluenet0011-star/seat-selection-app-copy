@@ -144,6 +144,7 @@ export default function HomePage() {
               <li><button onClick={() => router.push("/admin/classes")} style={{ width: "100%", textAlign: "left", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>🏫 수업(학급) 설정 및 학생 배정</button></li>
               <li><button onClick={() => router.push("/admin/layout-editor")} style={{ width: "100%", textAlign: "left", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>📐 좌석 배치도 설정</button></li>
               <li><button onClick={() => router.push("/admin/sessions")} style={{ width: "100%", textAlign: "left", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--border)", background: "none", cursor: "pointer" }}>⏰ 예약 세션 관리</button></li>
+              <li><button onClick={() => router.push("/admin/users")} style={{ width: "100%", textAlign: "left", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--border)", background: "none", cursor: "pointer", color: "var(--primary)", fontWeight: "bold" }}>💰 학생 실시간 포인트 현황/부여</button></li>
 
             </ul>
           </div>
