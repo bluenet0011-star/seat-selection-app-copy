@@ -34,6 +34,9 @@ export default function StudentManagement() {
     const [individualId, setIndividualId] = useState("");
     const [individualName, setIndividualName] = useState("");
 
+    // 강제 확인 모달 상태 추가
+    const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean, message: string, onConfirm: () => void } | null>(null);
+
     // 학생 및 수업 목록 실시간 구독
     useEffect(() => {
         const studentQuery = query(collection(db, "users"), where("role", "==", "student"));
@@ -137,7 +140,14 @@ export default function StudentManagement() {
 
     // 개별 삭제
     const handleDeleteOne = async (id: string, name: string) => {
-        if (!confirm(`${name} (${id}) 학생을 삭제하시겠습니까? 계정 정보와 모든 배정/예약 내역이 삭제됩니다.`)) return;
+        setConfirmModal({
+            isOpen: true,
+            message: `${name} (${id}) 학생을 삭제하시겠습니까? 계정 정보와 모든 배정/예약 내역이 삭제됩니다.`,
+            onConfirm: () => executeDeleteOne(id)
+        });
+    };
+
+    const executeDeleteOne = async (id: string) => {
         setLoading(true);
         try {
             const response = await fetch("/api/admin/delete-users", {
@@ -162,7 +172,14 @@ export default function StudentManagement() {
     // 선택 삭제
     const handleDeleteSelected = async () => {
         if (selectedIds.length === 0) return;
-        if (!confirm(`${selectedIds.length}명의 학생을 삭제하시겠습니까? 계정 정보와 모든 배정/예약 내역이 삭제됩니다.`)) return;
+        setConfirmModal({
+            isOpen: true,
+            message: `${selectedIds.length}명의 학생을 삭제하시겠습니까? 계정 정보와 모든 배정/예약 내역이 삭제됩니다.`,
+            onConfirm: () => executeDeleteSelected()
+        });
+    };
+
+    const executeDeleteSelected = async () => {
         setLoading(true);
         try {
             const response = await fetch("/api/admin/delete-users", {
@@ -220,28 +237,13 @@ export default function StudentManagement() {
         try {
             if (trimmedId !== editingId) {
                 // 학번이 바뀐 경우: 기존 계정 삭제 후 새 계정 생성
-                if (!confirm("학번 변경 시 계정이 재생성되어 비밀번호가 초기화됩니다. 계속하시겠습니까?")) {
-                    setLoading(false);
-                    return;
-                }
-
-                // 삭제 API 호출
-                const delRes = await fetch("/api/admin/delete-users", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ userIds: [editingId] })
+                setConfirmModal({
+                    isOpen: true,
+                    message: "학번 변경 시 계정이 재생성되어 비밀번호가 초기화됩니다. 계속하시겠습니까?",
+                    onConfirm: () => executeSaveEditWithIdChange(trimmedId, trimmedName)
                 });
-
-                if (!delRes.ok) throw new Error("기존 계정 삭제 중 오류가 발생했습니다.");
-
-                // 생성 API 호출
-                const createRes = await fetch("/api/admin/create-auth-user", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ id: trimmedId, name: trimmedName, email: `${trimmedId}@school.com` })
-                });
-
-                if (!createRes.ok) throw new Error("새 계정 생성 중 오류가 발생했습니다.");
+                setLoading(false);
+                return;
             } else {
                 // 이름만 바뀐 경우: Firestore만 업데이트
                 await updateDoc(doc(db, "users", editingId), {
@@ -255,9 +257,44 @@ export default function StudentManagement() {
         finally { setLoading(false); }
     };
 
+    const executeSaveEditWithIdChange = async (trimmedId: string, trimmedName: string) => {
+        if (!editingId) return;
+        setLoading(true);
+        try {
+            // 삭제 API 호출
+            const delRes = await fetch("/api/admin/delete-users", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userIds: [editingId] })
+            });
+
+            if (!delRes.ok) throw new Error("기존 계정 삭제 중 오류가 발생했습니다.");
+
+            // 생성 API 호출
+            const createRes = await fetch("/api/admin/create-auth-user", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: trimmedId, name: trimmedName, email: `${trimmedId}@school.com` })
+            });
+
+            if (!createRes.ok) throw new Error("새 계정 생성 중 오류가 발생했습니다.");
+
+            setEditingId(null);
+            alert("학번이 수정되었으며, 비밀번호가 초기화되었습니다.");
+        } catch (e: any) { alert("학번 수정 중 오류: " + e.message); }
+        finally { setLoading(false); }
+    };
+
     // 비밀번호 초기화
     const handleResetPassword = async (uid: string, name: string) => {
-        if (!confirm(`${name} 학생의 비밀번호를 123456으로 초기화하시겠습니까?`)) return;
+        setConfirmModal({
+            isOpen: true,
+            message: `${name} 학생의 비밀번호를 123456으로 초기화하시겠습니까?`,
+            onConfirm: () => executeResetPassword(uid, name)
+        });
+    };
+
+    const executeResetPassword = async (uid: string, name: string) => {
         setLoading(true);
         try {
             const response = await fetch("/api/admin/reset-password", {
@@ -296,7 +333,32 @@ export default function StudentManagement() {
         });
 
     return (
-        <div className="card">
+        <div className="card" style={{ position: 'relative' }}>
+            {confirmModal && confirmModal.isOpen && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', zIndex: 9999
+                }}>
+                    <div style={{
+                        background: 'white', padding: '2rem', borderRadius: '12px',
+                        maxWidth: '400px', width: '90%', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                    }}>
+                        <p style={{ fontSize: '1.1rem', marginBottom: '1.5rem', wordBreak: 'keep-all', lineHeight: '1.5' }}>
+                            {confirmModal.message}
+                        </p>
+                        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                            <button onClick={() => { setConfirmModal(null); confirmModal.onConfirm(); }} className="btn-primary" disabled={loading}>
+                                확인
+                            </button>
+                            <button onClick={() => setConfirmModal(null)} className="btn-outline" disabled={loading}>
+                                취소
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                 <h2 style={{ margin: 0 }}>학생 명단 관리</h2>
                 <Link href="/admin/users" style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
