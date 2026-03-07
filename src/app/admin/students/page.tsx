@@ -268,7 +268,8 @@ export default function StudentManagement() {
             if (response.ok) {
                 alert(`${name} 학생의 비밀번호가 123456으로 초기화되었습니다.`);
             } else {
-                throw new Error("비밀번호 초기화 중 오류가 발생했습니다.");
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || "비밀번호 초기화 중 오류가 발생했습니다.");
             }
         } catch (error: any) {
             alert(error.message);

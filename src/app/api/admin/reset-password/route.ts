@@ -9,8 +9,26 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "초기화할 사용자 ID(UID)가 필요합니다." }, { status: 400 });
         }
 
+        if (!adminAuth || !adminDb) {
+            return NextResponse.json({ error: "Firebase Admin SDK 설정 에러: Vercel 환경 변수(FIREBASE_PRIVATE_KEY)를 확인해주세요." }, { status: 500 });
+        }
+
+        const email = `${uid}@school.com`;
+        let authUid = uid;
+
+        // 학생 ID(uid 변수)와 실제 Firebase Auth UID가 다를 수 있으므로 이메일로 검색
+        try {
+            const userRecord = await adminAuth.getUserByEmail(email);
+            authUid = userRecord.uid;
+        } catch (e: any) {
+            // 이메일로 못 찾으면 원래 uid로 시도
+            if (e.code !== "auth/user-not-found") {
+                throw e;
+            }
+        }
+
         // 1. Firebase Admin SDK를 사용하여 비밀번호를 123456으로 강제 업데이트
-        await adminAuth.updateUser(uid, {
+        await adminAuth.updateUser(authUid, {
             password: "123456"
         });
 
