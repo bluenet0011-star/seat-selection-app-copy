@@ -176,6 +176,11 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         }
     };
 
+    // 내가 입찰 중인 포인트 계산 (묶인 포인트)
+    const myCurrentBid = Object.values(bids).find(b => b.uid === userData?.id);
+    const lockedPoints = myCurrentBid ? myCurrentBid.points : 0;
+    const availablePoints = (userData?.points ?? 0) - lockedPoints;
+
     const submitBid = async () => {
         if (!selectedSeatForBid || !userData || booking) return;
         const amount = Number(bidAmount);
@@ -183,12 +188,18 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
             alert("올바른 포인트를 입력하세요.");
             return;
         }
-        if (amount > (userData.points || 0)) {
-            alert("보유 포인트가 부족합니다.");
+        if (amount > availablePoints) {
+            alert(`사용 가능한 포인트가 부족합니다. (현재 가용: ${availablePoints}P)`);
             return;
         }
 
         const seatId = selectedSeatForBid.id;
+
+        // 다른 자리에 최고 입찰자로 있는 경우, 입찰 불가 처리 (1인 1좌석 룰 강화)
+        if (myCurrentBid && Object.keys(bids).find(key => bids[key].uid === userData.id) !== seatId) {
+            alert("이미 다른 좌석에 최고 입찰자로 등록되어 있습니다. 다른 학생이 상위 입찰을 하여 밀려나기 전까지는 다른 자리에 입찰할 수 없습니다.");
+            return;
+        }
         setBooking(true);
         try {
             const sessionRef = doc(db, "sessions", sessionId);
@@ -258,6 +269,9 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                 const actualBid = currentBids[seatId];
 
                 if (!actualBid) throw "입찰 정보가 없습니다.";
+                if (actualBid.points !== bidInfo.points || actualBid.uid !== bidInfo.uid) {
+                    throw "그 사이 입찰 상황이 변경되었습니다. 화면을 확인하고 다시 시도하세요.";
+                }
                 if (currentRes[seatId]) throw "이미 낙찰된 자리입니다.";
 
                 const userRef = doc(db, "users", actualBid.uid);
@@ -590,7 +604,7 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
 
                         <div style={{ marginBottom: '1.5rem' }}>
                             <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text)' }}>
-                                나의 입찰액 (보유: {(userData?.points ?? 0).toLocaleString()}P)
+                                나의 입찰액 (가용: {availablePoints.toLocaleString()}P / 총: {(userData?.points ?? 0).toLocaleString()}P)
                             </label>
                             <input
                                 type="number"
