@@ -25,9 +25,14 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
     const [loading, setLoading] = useState(true);
     const [booking, setBooking] = useState(false);
 
+    // 새 기능: 과거 짝꿍 데이터
+    const [partnerHistory, setPartnerHistory] = useState<Array<{ id: string, student1: string, student2: string }>>([]);
+
     // 입찰 모달 관련 상태
     const [selectedSeatForBid, setSelectedSeatForBid] = useState<Seat | null>(null);
     const [bidAmount, setBidAmount] = useState<number | "">("");
+    const [isAnonymous, setIsAnonymous] = useState(false);
+    const [isPrintMode, setIsPrintMode] = useState(false);
 
     const [studentsMap, setStudentsMap] = useState<Record<string, { id: string, name: string }>>({});
     const [unassignedStudents, setUnassignedStudents] = useState<any[]>([]);
@@ -53,6 +58,19 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
 
     useEffect(() => {
         if (!sessionId) return;
+
+        // Fetch Partner History Once
+        const fetchPartnerHistory = async () => {
+            try {
+                const snap = await getDoc(doc(db, "settings", "partner_history"));
+                if (snap.exists()) {
+                    setPartnerHistory(snap.data().pairs || []);
+                }
+            } catch (err) {
+                console.error("짝꿍 기록 불러오기 실패:", err);
+            }
+        };
+        fetchPartnerHistory();
 
         const sessionRef = doc(db, "sessions", sessionId);
         const unsubscribe = onSnapshot(sessionRef, async (docSnap) => {
@@ -112,6 +130,7 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                 setReservations(newRes);
                 setBids(newBids);
                 setClassId(data.classId);
+                setIsAnonymous(!!data.isAnonymous);
 
                 // 상시 오픈이 아닌 경우 시간 체크
                 if (data.status === "scheduled" && data.scheduledOpenAt) {
@@ -193,6 +212,32 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         }
 
         const seatId = selectedSeatForBid.id;
+
+        // --- 과거 짝꿍 제한 검사 로직 ---
+        const isPartnerForbidden = (uid1: string, uid2: string) => {
+            return partnerHistory.some(p =>
+                (p.student1 === uid1 && p.student2 === uid2) ||
+                (p.student1 === uid2 && p.student2 === uid1)
+            );
+        };
+
+        // 현재 선택한 자리의 r, c
+        const myR = selectedSeatForBid.r;
+        const myC = selectedSeatForBid.c;
+
+        // 좌/우 (c - 1, c + 1) 인접 좌석 찾기
+        const adjacentSeats = layout.filter(s => s.active && s.r === myR && Math.abs(s.c - myC) === 1);
+
+        for (const adjSeat of adjacentSeats) {
+            let adjUserUid = reservations[adjSeat.id] || bids[adjSeat.id]?.uid;
+
+            if (adjUserUid && isPartnerForbidden(userData.id, adjUserUid)) {
+                alert(`경고: 옆 자리(${adjUserUid === reservations[adjSeat.id] ? "배정 완료" : "입찰 중"}) 학생과는 이전에 짝이었습니다.\n해당 학생의 옆자리에는 입찰할 수 없습니다.`);
+                return;
+            }
+        }
+        // --- 검사 끝 ---
+
         setBooking(true);
         try {
             const sessionRef = doc(db, "sessions", sessionId);
@@ -237,6 +282,41 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         } catch (e: any) {
             console.error(e);
             alert(typeof e === 'string' ? e : "입찰 중 오류가 발생했습니다.");
+        } finally {
+            setBooking(false);
+        }
+    };
+
+    const cancelBid = async () => {
+        if (!selectedSeatForBid || !userData || booking) return;
+        const seatId = selectedSeatForBid.id;
+
+        if (!confirm("정말 현재 좌석의 입찰을 취소하시겠습니까? (포인트는 100% 반환됩니다)")) return;
+
+        setBooking(true);
+        try {
+            const sessionRef = doc(db, "sessions", sessionId);
+            await runTransaction(db, async (transaction) => {
+                const sDoc = await transaction.get(sessionRef);
+                if (!sDoc.exists()) throw "Session doesn't exist";
+                const data = sDoc.data();
+                const currentBids = data.bids || {};
+
+                // 내가 최고 입찰자인지 검증
+                if (!currentBids[seatId] || currentBids[seatId].uid !== userData.id) {
+                    throw "현재 좌석의 최고 입찰자만 취소할 수 있습니다.";
+                }
+
+                const newBids = { ...currentBids };
+                delete newBids[seatId];
+
+                transaction.update(sessionRef, { bids: newBids });
+            });
+            alert("입찰이 성공적으로 취소되었습니다.");
+            setSelectedSeatForBid(null);
+        } catch (e: any) {
+            console.error(e);
+            alert(typeof e === 'string' ? e : "입찰 취소 중 오류가 발생했습니다.");
         } finally {
             setBooking(false);
         }
@@ -361,14 +441,64 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
     const isTeacher = userData?.role === 'teacher';
 
     return (
-        <div className="container" style={{ display: 'flex', flexDirection: isTeacher ? 'row' : 'column', gap: '2rem', alignItems: 'flex-start' }}>
-            <Toaster position="bottom-right" />
-            <div style={{ flex: 1, width: '100%' }}>
-                <div className="card" style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
-                    <h2 style={{ color: 'var(--primary)' }}>좌석 신청 및 배정 현황</h2>
-                    <p style={{ fontSize: '0.875rem', color: 'var(--secondary)' }}>
+        <div className="container" style={{ display: 'flex', flexDirection: isTeacher && !isPrintMode ? 'row' : 'column', gap: '2rem', alignItems: 'flex-start' }}>
+            <style>
+                {`
+                    @media print {
+                        body * { visibility: hidden; }
+                        .print-area, .print-area * { visibility: visible; }
+                        .print-area {
+                            position: absolute;
+                            left: 0;
+                            top: 0;
+                            width: 100%;
+                            padding: 0;
+                            margin: 0;
+                        }
+                        .no-print { display: none !important; }
+                        .card { box-shadow: none !important; border: none !important; }
+                    }
+                `}
+            </style>
+            <div className="no-print">
+                <Toaster position="bottom-right" />
+            </div>
+            <div className="print-area" style={{ flex: 1, width: '100%' }}>
+                <div className="card" style={{ marginBottom: '1.5rem', textAlign: 'center', position: 'relative' }}>
+                    <h2 style={{ color: 'var(--primary)', marginBottom: '0.5rem' }}>
+                        {isPrintMode ? "좌석 배치도 (교탁 시점)" : "좌석 신청 및 배정 현황"}
+                    </h2>
+                    <p className="no-print" style={{ fontSize: '0.875rem', color: 'var(--secondary)' }}>
                         {isTeacher ? "학생을 드래그하여 배치하거나 자리를 옮길 수 있습니다." : "원하는 빈 좌석을 터치하여 예약하세요."}
                     </p>
+
+                    {isTeacher && (
+                        <div className="no-print" style={{ position: 'absolute', right: '1.5rem', top: '1.5rem', display: 'flex', gap: '0.5rem' }}>
+                            <button
+                                onClick={() => {
+                                    if (!isPrintMode) setIsPrintMode(true);
+                                    else { setIsPrintMode(false); }
+                                }}
+                                style={{
+                                    padding: '0.5rem 1rem', background: isPrintMode ? '#475569' : 'var(--primary)',
+                                    color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold'
+                                }}
+                            >
+                                {isPrintMode ? "일반 모드로 복귀" : "🖨️ 인쇄용 교탁 시점"}
+                            </button>
+                            {isPrintMode && (
+                                <button
+                                    onClick={() => window.print()}
+                                    style={{
+                                        padding: '0.5rem 1rem', background: '#10b981',
+                                        color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold'
+                                    }}
+                                >
+                                    인쇄하기
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 <div style={{
@@ -401,8 +531,12 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                         gridTemplateColumns: (() => {
                             const maxC = layout.length > 0 ? Math.max(...layout.map(s => s.c)) : 0;
                             const cols = maxC + 1;
+
+                            // 인쇄 모드일 경우 gap 배열도 뒤집어야 함
+                            const activeGaps = isPrintMode ? [...columnGaps].reverse() : columnGaps;
+
                             return Array.from({ length: cols }).map((_, i) =>
-                                i === cols - 1 ? '58px' : `58px ${columnGaps[i] !== undefined ? columnGaps[i] : 12}px`
+                                i === cols - 1 ? '58px' : `58px ${activeGaps[i] !== undefined ? activeGaps[i] : 12}px`
                             ).join(' ');
                         })(),
                         rowGap: '12px',
@@ -411,8 +545,15 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                         margin: '0 auto'
                     }}>
                         {layout.map(seat => {
+                            // 교사 시점 인쇄 모드: 좌우, 상하 반전 (거상)
+                            const maxR = layout.length > 0 ? Math.max(...layout.map(s => s.r)) : 0;
+                            const maxC = layout.length > 0 ? Math.max(...layout.map(s => s.c)) : 0;
+
+                            const renderR = isPrintMode ? maxR - seat.r : seat.r;
+                            const renderC = isPrintMode ? maxC - seat.c : seat.c;
+
                             if (!seat.active) {
-                                return <div key={seat.id} style={{ gridColumn: seat.c * 2 + 1, gridRow: seat.r + 1, width: '58px', height: '58px' }}></div>;
+                                return <div key={seat.id} style={{ gridColumn: renderC * 2 + 1, gridRow: renderR + 1, width: '58px', height: '58px' }}></div>;
                             }
 
                             const studentUid = reservations[seat.id];
@@ -447,8 +588,8 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                                     onDragStart={(e) => onDragStart(e, { type: 'move', seatId: seat.id, uid: studentUid })}
                                     style={{
                                         position: 'relative',
-                                        gridColumn: seat.c * 2 + 1,
-                                        gridRow: seat.r + 1,
+                                        gridColumn: renderC * 2 + 1,
+                                        gridRow: renderR + 1,
                                         width: '58px',
                                         height: '58px',
                                         background: bg,
@@ -496,7 +637,9 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                                         )
                                     ) : currentBid ? (
                                         <>
-                                            <div style={{ fontSize: '0.6rem', opacity: 0.9 }}>{currentBid.name}</div>
+                                            <div style={{ fontSize: '0.6rem', opacity: 0.9 }}>
+                                                {isAnonymous && !isTeacher && !isMyBid ? "익명" : currentBid.name}
+                                            </div>
                                             <div style={{ fontSize: '0.7rem' }}>{currentBid.points}P</div>
                                         </>
                                     ) : (
@@ -508,7 +651,7 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                     </div>
                 </div>
 
-                <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
+                <div className="no-print" style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <div style={{ width: '14px', height: '14px', background: 'white', border: '1px solid var(--primary)', borderRadius: '3px' }}></div>
                         <span style={{ fontSize: '0.75rem' }}>공석</span>
@@ -532,8 +675,8 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                 </div>
             </div>
 
-            {isTeacher && (
-                <div className="card" style={{ width: '280px', minHeight: '500px', position: 'sticky', top: '20px' }}>
+            {isTeacher && !isPrintMode && (
+                <div className="card no-print" style={{ width: '280px', minHeight: '500px', position: 'sticky', top: '20px' }}>
                     <h3 style={{ fontSize: '1rem', marginBottom: '1rem', borderBottom: '2px solid var(--border)', paddingBottom: '0.5rem' }}>
                         미배정 학생 ({unassignedStudents.length})
                     </h3>
@@ -588,7 +731,9 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                             {bids[selectedSeatForBid.id] ? (
                                 <div>
                                     <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#f59e0b' }}>{bids[selectedSeatForBid.id].points}P</span>
-                                    <span style={{ fontSize: '0.8rem', color: '#64748b', marginLeft: '0.5rem' }}>({bids[selectedSeatForBid.id].name})</span>
+                                    <span style={{ fontSize: '0.8rem', color: '#64748b', marginLeft: '0.5rem' }}>
+                                        ({isAnonymous && !isTeacher && bids[selectedSeatForBid.id].uid !== userData?.id ? "익명" : bids[selectedSeatForBid.id].name})
+                                    </span>
                                 </div>
                             ) : (
                                 <div style={{ color: '#94a3b8' }}>입찰 없음</div>
@@ -616,15 +761,25 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                                 onClick={() => setSelectedSeatForBid(null)}
                                 style={{ flex: 1, padding: '0.75rem', background: '#e2e8f0', color: '#475569', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}
                             >
-                                취소
+                                닫기
                             </button>
-                            <button
-                                onClick={submitBid}
-                                disabled={booking}
-                                style={{ flex: 1, padding: '0.75rem', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: booking ? 'not-allowed' : 'pointer', opacity: booking ? 0.7 : 1 }}
-                            >
-                                {booking ? "처리 중..." : "입찰하기"}
-                            </button>
+                            {bids[selectedSeatForBid.id]?.uid === userData?.id ? (
+                                <button
+                                    onClick={cancelBid}
+                                    disabled={booking}
+                                    style={{ flex: 1, padding: '0.75rem', background: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: booking ? 'not-allowed' : 'pointer', opacity: booking ? 0.7 : 1 }}
+                                >
+                                    {booking ? "처리 중..." : "입찰 포기"}
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={submitBid}
+                                    disabled={booking}
+                                    style={{ flex: 1, padding: '0.75rem', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: booking ? 'not-allowed' : 'pointer', opacity: booking ? 0.7 : 1 }}
+                                >
+                                    {booking ? "처리 중..." : "입찰하기"}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>

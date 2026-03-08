@@ -359,11 +359,16 @@ export default function StudentManagement() {
                 </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
                 <h2 style={{ margin: 0 }}>학생 명단 관리</h2>
-                <Link href="/admin/users" style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>💰</span> 학생 포인트 관리 (부여/차감) 하기
-                </Link>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                    <Link href="/admin/partners" style={{ padding: '0.5rem 1rem', background: '#ec4899', color: 'white', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>👥</span> 과거 짝꿍 제한 관리
+                    </Link>
+                    <Link href="/admin/users" style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: '6px', textDecoration: 'none', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>💰</span> 학생 포인트 관리 (부여/차감) 하기
+                    </Link>
+                </div>
             </div>
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
                 <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} />

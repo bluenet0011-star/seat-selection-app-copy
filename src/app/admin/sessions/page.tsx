@@ -15,6 +15,7 @@ interface Session {
   scheduledOpenAt?: string;
   layout: any[];
   auctionId?: string;
+  isAnonymous?: boolean;
 }
 
 export default function SessionManagement() {
@@ -23,6 +24,7 @@ export default function SessionManagement() {
   const [selectedClassId, setSelectedClassId] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [scheduledOpenAt, setScheduledOpenAt] = useState("");
+  const [isAnonymousMode, setIsAnonymousMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const router = useRouter();
@@ -75,6 +77,7 @@ export default function SessionManagement() {
         status,
         scheduledOpenAt: (!openNow && scheduledOpenAt) ? scheduledOpenAt : null,
         reservations: {},
+        isAnonymous: isAnonymousMode,
         createdAt: new Date().toISOString(),
       });
 
@@ -174,6 +177,18 @@ export default function SessionManagement() {
             />
             <span style={{ fontSize: "0.75rem", color: "var(--secondary)" }}>비워두면 즉시 오픈</span>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+            <input
+              type="checkbox"
+              id="anonymousMode"
+              checked={isAnonymousMode}
+              onChange={(e) => setIsAnonymousMode(e.target.checked)}
+              style={{ width: "1.2rem", height: "1.2rem", cursor: "pointer" }}
+            />
+            <label htmlFor="anonymousMode" style={{ fontSize: "1rem", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              🕵️ 익명 입찰 모드 활성화 (학생 화면에서 이름 숨김)
+            </label>
+          </div>
           <div style={{ display: "flex", gap: "1rem" }}>
             <button
               onClick={() => handleCreateSession(true)}
@@ -229,6 +244,14 @@ export default function SessionManagement() {
                     }}>
                       {session.status === "open" ? "진행 중" : session.status === "scheduled" ? "예약됨" : "종료됨"}
                     </span>
+                    {session.isAnonymous && (
+                      <span style={{
+                        fontSize: "0.75rem", padding: "2px 8px", borderRadius: "12px",
+                        background: "#475569", color: "white"
+                      }}>
+                        🕵️ 익명 모드
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: "0.75rem", color: "var(--secondary)", marginTop: "0.25rem" }}>
                     생성: {new Date(session.createdAt).toLocaleString()}
