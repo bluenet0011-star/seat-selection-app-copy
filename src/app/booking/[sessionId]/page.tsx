@@ -423,6 +423,87 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         }
     };
 
+    // --- 일괄 짝꿍 등록 로직 (교사 전용) ---
+    const handleAutoRegisterPartners = async () => {
+        if (!confirm("현재 좌석 배치도의 양 옆에 앉은 학생들을 통째로 스캔하여 '과거 짝꿍' 리스트에 추가합니다.\n진행하시겠습니까? (이미 추가된 짝꿍은 중복 등록되지 않습니다)")) return;
+
+        setBooking(true);
+        try {
+            const settingsRef = doc(db, "settings", "partner_history");
+            let newPairsCount = 0;
+
+            await runTransaction(db, async (transaction) => {
+                const snap = await transaction.get(settingsRef);
+                const currentPairs: Array<any> = snap.exists() ? (snap.data().pairs || []) : [];
+                const updatedPairs = [...currentPairs];
+
+                // 행(R)별로 좌석을 묶고, 열(C)을 기준으로 정렬
+                const rowMap: Record<number, Seat[]> = {};
+                layout.forEach(seat => {
+                    if (!seat.active) return;
+                    if (!rowMap[seat.r]) rowMap[seat.r] = [];
+                    rowMap[seat.r].push(seat);
+                });
+
+                // 각 행을 순회하면서 인접한 학생 짝 찾기
+                Object.values(rowMap).forEach(rowSeats => {
+                    rowSeats.sort((a, b) => a.c - b.c); // 열 순서대로 정렬
+
+                    for (let i = 0; i < rowSeats.length - 1; i++) {
+                        const currentSeat = rowSeats[i];
+                        const nextSeat = rowSeats[i + 1];
+
+                        // 두 좌석이 물리적으로 인접해 있는지 확인 (c 차이가 1)
+                        if (Math.abs(currentSeat.c - nextSeat.c) === 1) {
+                            const uid1 = reservations[currentSeat.id];
+                            const uid2 = reservations[nextSeat.id];
+
+                            if (uid1 && uid2 && uid1 !== uid2) {
+                                // 둘 다 학생이 배정되어 있는 경우에만 짝꿍으로 인정
+                                const exists = updatedPairs.some(p =>
+                                    (p.student1 === uid1 && p.student2 === uid2) ||
+                                    (p.student1 === uid2 && p.student2 === uid1)
+                                );
+
+                                if (!exists) {
+                                    const student1Info = studentsMap[uid1];
+                                    const student2Info = studentsMap[uid2];
+
+                                    if (student1Info && student2Info) {
+                                        updatedPairs.push({
+                                            id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+                                            student1: uid1,
+                                            student1Name: student1Info.name,
+                                            student2: uid2,
+                                            student2Name: student2Info.name
+                                        });
+                                        newPairsCount++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                transaction.update(settingsRef, { pairs: updatedPairs });
+            });
+
+            alert(`스캔 완료! 총 ${newPairsCount}쌍의 새로운 짝꿍이 성공적으로 등록되었습니다.`);
+
+            // 로컬 상태 동기화를 위해 즉시 다시 불러오기 (혹은 위의 로직에서 수동 갱신)
+            const snap = await getDoc(doc(db, "settings", "partner_history"));
+            if (snap.exists()) {
+                setPartnerHistory(snap.data().pairs || []);
+            }
+
+        } catch (e: any) {
+            console.error("일괄 짝꿍 등록 오류:", e);
+            alert("오류가 발생했습니다: " + e.message);
+        } finally {
+            setBooking(false);
+        }
+    };
+
     if (loading) return <div>좌석 정보를 불러오는 중...</div>;
     if (accessError) return (
         <div className="card" style={{ textAlign: 'center', margin: '2rem auto', maxWidth: '500px' }}>
@@ -713,6 +794,22 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                                 모든 학생이 배정되었습니다.
                             </p>
                         )}
+                    </div>
+
+                    <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '2px dashed var(--border)', textAlign: 'center' }}>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--secondary)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
+                            모든 자리가 확정되었다면 아래 버튼을 눌러 양 옆으로 앉은 학생들을 관리자 설정의 '과거 짝꿍 목록'에 영구 등록합니다.
+                        </p>
+                        <button
+                            onClick={handleAutoRegisterPartners}
+                            disabled={booking}
+                            style={{
+                                width: '100%', padding: '0.75rem', background: 'var(--primary)',
+                                color: 'white', border: 'none', borderRadius: '4px', cursor: booking ? 'wait' : 'pointer', fontWeight: 'bold'
+                            }}
+                        >
+                            {booking ? "스캔 중..." : "👥 현재 짝꿍 일괄 등록"}
+                        </button>
                     </div>
                 </div>
             )}
