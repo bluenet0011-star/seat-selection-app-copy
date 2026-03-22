@@ -30,15 +30,7 @@ export default function SessionManagement() {
   const [creating, setCreating] = useState(false);
   const router = useRouter();
 
-  const handleDeleteSession = async (sessionId: string) => {
-    if (!confirm("정말로 이 세션을 삭제하시겠습니까?")) return;
-    try {
-      await deleteDoc(doc(db, "sessions", sessionId));
-      alert("세션이 삭제되었습니다.");
-    } catch (error) {
-      console.error("세션 삭제 중 오류:", error);
-    }
-  };
+
 
   useEffect(() => {
     const unsubSessions = onSnapshot(collection(db, "sessions"), (snapshot) => {
