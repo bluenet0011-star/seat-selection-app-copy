@@ -203,6 +203,30 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                 return;
             }
 
+            // --- 과거 짝꿍 제한 검사 로직 ---
+            const isPartnerForbidden = (uid1: string, uid2: string) => {
+                return partnerHistory.some(p =>
+                    (p.student1 === uid1 && p.student2 === uid2) ||
+                    (p.student1 === uid2 && p.student2 === uid1)
+                );
+            };
+
+            const seat = layout.find(s => s.id === seatId);
+            if (seat) {
+                const myR = seat.r;
+                const myC = seat.c;
+                const adjacentSeats = layout.filter(s => s.active && s.r === myR && Math.abs(s.c - myC) === 1);
+
+                for (const adjSeat of adjacentSeats) {
+                    let adjUserUid = reservations[adjSeat.id];
+                    if (adjUserUid && isPartnerForbidden(userData.id, adjUserUid)) {
+                        alert(`경고: 옆 자리 학생과는 이전에 짝이었습니다.\n해당 학생의 옆자리는 선택할 수 없습니다.`);
+                        return;
+                    }
+                }
+            }
+            // --- 검사 끝 ---
+
             if (!confirm(`이 자리를 선택하시겠습니까? (입찰한 ${currentTurnUser.points}P가 차감됩니다)`)) return;
             setBooking(true);
             try {
