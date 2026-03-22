@@ -34,6 +34,13 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
     const [isAnonymous, setIsAnonymous] = useState(false);
     const [isPrintMode, setIsPrintMode] = useState(false);
 
+    // 새 기능: 블라인드 모드 상태
+    const [sessionStatus, setSessionStatus] = useState<string>("open");
+    const [isBlindMode, setIsBlindMode] = useState<boolean>(false);
+    const [blindBids, setBlindBids] = useState<Record<string, { studentId: string, name: string, points: number, submittedAt: string }>>({});
+    const [selectionOrder, setSelectionOrder] = useState<any[]>([]);
+    const [currentSelectionIndex, setCurrentSelectionIndex] = useState<number>(0);
+
     const [studentsMap, setStudentsMap] = useState<Record<string, { id: string, name: string }>>({});
     const [unassignedStudents, setUnassignedStudents] = useState<any[]>([]);
     const [columnGaps, setColumnGaps] = useState<number[]>([]);
@@ -132,6 +139,13 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                 setClassId(data.classId);
                 setIsAnonymous(!!data.isAnonymous);
 
+                // 블라인드 모드 데이터 동기화
+                setSessionStatus(data.status || "open");
+                setIsBlindMode(!!data.isBlindMode);
+                setBlindBids(data.blindBids || {});
+                setSelectionOrder(data.selectionOrder || []);
+                setCurrentSelectionIndex(data.currentSelectionIndex || 0);
+
                 // 상시 오픈이 아닌 경우 시간 체크
                 if (data.status === "scheduled" && data.scheduledOpenAt) {
                     const openTime = new Date(data.scheduledOpenAt);
@@ -177,9 +191,55 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
         return () => unsubscribe();
     }, [sessionId]);
 
-    const handleSeatClick = (seatId: string) => {
+    const handleSeatClick = async (seatId: string) => {
         if (userData?.role === 'teacher') return;
         if (reservations[seatId]) return; // 이미 확정된 자리
+
+        // 블라인드 모드 - 순차 선택 처리
+        if (isBlindMode && sessionStatus === 'selection') {
+            const currentTurnUser = selectionOrder[currentSelectionIndex];
+            if (!currentTurnUser || currentTurnUser.uid !== userData?.id) {
+                alert("아직 본인의 차례가 아닙니다.");
+                return;
+            }
+
+            if (!confirm(`이 자리를 선택하시겠습니까? (입찰한 ${currentTurnUser.points}P가 차감됩니다)`)) return;
+            setBooking(true);
+            try {
+                const sessionRef = doc(db, "sessions", sessionId);
+                await runTransaction(db, async (transaction) => {
+                    const sDoc = await transaction.get(sessionRef);
+                    if (!sDoc.exists()) throw "Session doesn't exist";
+                    const data = sDoc.data();
+                    const currentRes = data.reservations || {};
+                    if (currentRes[seatId]) throw "이미 선택된 자리입니다.";
+
+                    const userRef = doc(db, "users", userData.id);
+                    const uDoc = await transaction.get(userRef);
+                    if (!uDoc.exists()) throw "User missing";
+
+                    const currentPoints = uDoc.data().points || 0;
+                    if (currentPoints < currentTurnUser.points) throw "잔여 포인트가 부족합니다.";
+
+                    transaction.update(userRef, { points: currentPoints - currentTurnUser.points });
+
+                    const newRes = { ...currentRes };
+                    newRes[seatId] = userData.id;
+
+                    const nextIndex = (data.currentSelectionIndex || 0) + 1;
+                    transaction.update(sessionRef, { reservations: newRes, currentSelectionIndex: nextIndex });
+                });
+                alert("자리 선택이 완료되었습니다!");
+            } catch (e: any) {
+                console.error(e);
+                alert(typeof e === 'string' ? e : "자리 선택 중 오류가 발생했습니다.");
+            } finally {
+                setBooking(false);
+            }
+            return;
+        }
+
+        if (isBlindMode) return; // 블라인드 모드에서는 일반 좌석 클릭 입찰 막음
 
         // 낙찰된 학생은 추가 입찰 불가
         const isAlreadyAwarded = Object.values(reservations).includes(userData?.id);
@@ -372,6 +432,102 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
             alert(typeof e === 'string' ? e : "낙찰 처리 중 오류가 발생했습니다.");
         } finally {
             setBooking(false);
+        }
+    };
+
+    // --- 블라인드 모드 전용 함수 ---
+    const submitBlindBid = async () => {
+        if (!userData || booking) return;
+        const amount = Number(bidAmount);
+        if (!amount || amount <= 0) {
+            alert("올바른 포인트를 입력하세요.");
+            return;
+        }
+        if (amount > availablePoints) {
+            alert(`사용 가능한 포인트가 부족합니다. (현재 가용: ${availablePoints}P)`);
+            return;
+        }
+
+        setBooking(true);
+        try {
+            const sessionRef = doc(db, "sessions", sessionId);
+            await runTransaction(db, async (transaction) => {
+                const sDoc = await transaction.get(sessionRef);
+                if (!sDoc.exists()) throw "Session doesn't exist";
+                const data = sDoc.data();
+                if (data.status !== 'open') throw "입찰 기간이 종료되었습니다.";
+
+                const currentBlindBids = data.blindBids || {};
+                currentBlindBids[userData.id] = {
+                    studentId: userData.id,
+                    name: userData.name || "",
+                    points: amount,
+                    submittedAt: new Date().toISOString()
+                };
+                transaction.update(sessionRef, { blindBids: currentBlindBids });
+            });
+            alert("블라인드 입찰이 완료되었습니다!");
+            setBidAmount("");
+        } catch (e: any) {
+            console.error(e);
+            alert(typeof e === 'string' ? e : "입찰 중 오류가 발생했습니다.");
+        } finally {
+            setBooking(false);
+        }
+    };
+
+    const endBiddingAndRank = async () => {
+        if (!confirm("입찰을 종료하고 순위를 부여하시겠습니까? (이후 학생들은 입찰할 수 없습니다)")) return;
+        setBooking(true);
+        try {
+            const sessionRef = doc(db, "sessions", sessionId);
+            await runTransaction(db, async (transaction) => {
+                const sDoc = await transaction.get(sessionRef);
+                if (!sDoc.exists()) throw "Session doesn't exist";
+                const data = sDoc.data();
+                const currentBlindBids = data.blindBids || {};
+
+                // Sort by points desc, then by time asc
+                const order = Object.values(currentBlindBids).sort((a: any, b: any) => {
+                    if (b.points !== a.points) return b.points - a.points;
+                    return new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime();
+                }).map((bid: any, index: number) => ({
+                    ...bid, // uid is essentially studentId
+                    uid: bid.studentId,
+                    rank: index + 1
+                }));
+
+                transaction.update(sessionRef, {
+                    selectionOrder: order,
+                    status: "ready_to_select"
+                });
+            });
+            alert("순위 부여 완료!");
+        } catch (e: any) {
+            console.error(e);
+            alert(typeof e === 'string' ? e : "순위 부여 중 오류가 발생했습니다.");
+        } finally {
+            setBooking(false);
+        }
+    };
+
+    const startSeatSelection = async () => {
+        if (!confirm("실시간 자리 선택을 시작하시겠습니까?")) return;
+        try {
+            await updateDoc(doc(db, "sessions", sessionId), { status: "selection", currentSelectionIndex: 0 });
+            alert("자리 선택 시작!");
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const skipTurn = async () => {
+        if (!confirm("현재 차례를 건너뛰시겠습니까?")) return;
+        try {
+            const nextIndex = currentSelectionIndex + 1;
+            await updateDoc(doc(db, "sessions", sessionId), { currentSelectionIndex: nextIndex });
+        } catch (e) {
+            console.error(e);
         }
     };
 
@@ -598,6 +754,135 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                 }}>
                     교탁
                 </div>
+
+                {/* --- 블라인드 모드 UI --- */}
+                {isBlindMode && (
+                    <div className="no-print" style={{ marginBottom: "2rem", padding: "1.5rem", background: "white", borderRadius: "12px", border: "1px solid var(--primary)", boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)" }}>
+                        <h3 style={{ color: "var(--primary)", borderBottom: "2px solid #e2e8f0", paddingBottom: "0.5rem", marginBottom: "1rem" }}>
+                            🙈 블라인드 입찰 및 순위별 순차 선택 현황
+                        </h3>
+
+                        {/* 1. 입찰 단계 */}
+                        {sessionStatus === 'open' && (
+                            <div>
+                                {isTeacher ? (
+                                    <div>
+                                        <p style={{ marginBottom: "1rem", fontWeight: "bold" }}>현재 입찰 건수: {Object.keys(blindBids).length}건</p>
+                                        <button onClick={endBiddingAndRank} disabled={booking} className="btn-primary" style={{ width: "100%", padding: "1rem", fontSize: "1.1rem" }}>
+                                            ⏱️ 입찰 마감 및 순위 부여
+                                        </button>
+                                        <div style={{ marginTop: "1rem", maxHeight: "200px", overflowY: "auto" }}>
+                                            {Object.values(blindBids).map((b: any, i) => (
+                                                <div key={i} style={{ padding: "0.5rem", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between" }}>
+                                                    <span>{b.name} ({b.studentId})</span>
+                                                    <span style={{ fontWeight: "bold", color: "var(--primary)" }}>{b.points}P</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div style={{ textAlign: "center" }}>
+                                        {blindBids[userData?.id || ""] ? (
+                                            <div style={{ padding: "1.5rem", background: "#f0fdf4", borderRadius: "8px", border: "1px solid #10b981", color: "#047857" }}>
+                                                <h4 style={{ fontSize: "1.2rem", marginBottom: "0.5rem" }}>✅ 입찰 완료</h4>
+                                                <p>나의 일괄 입찰가: <strong>{blindBids[userData?.id || ""].points}P</strong></p>
+                                                <p style={{ marginTop: "0.5rem", fontSize: "0.875rem" }}>선생님이 입찰을 마감하고 순위를 부여할 때까지 잠시 대기해주세요.</p>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <p style={{ marginBottom: "1rem" }}>이번 세션의 자리 선택 순위를 결정하기 위해 블라인드 입찰을 진행합니다.<br />가용 포인트 내에서 자유롭게 입찰하세요. 최고 입찰자부터 자리 선택 권한을 얻습니다.</p>
+                                                <div style={{ display: "flex", gap: "1rem", justifyContent: "center" }}>
+                                                    <input
+                                                        type="number"
+                                                        value={bidAmount}
+                                                        onChange={(e) => setBidAmount(e.target.value === "" ? "" : Number(e.target.value))}
+                                                        placeholder="입찰할 포인트 입력"
+                                                        style={{ padding: "0.75rem", borderRadius: "8px", border: "1px solid var(--border)", width: "200px", fontSize: "1.1rem", textAlign: "center" }}
+                                                    />
+                                                    <button onClick={submitBlindBid} disabled={booking} className="btn-primary" style={{ padding: "0.75rem 1.5rem" }}>
+                                                        입찰하기
+                                                    </button>
+                                                </div>
+                                                <p style={{ marginTop: "0.5rem", fontSize: "0.875rem", color: "var(--secondary)" }}>내 보유 포인트: {availablePoints}P</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* 2. 순위 부여 완료 (자리 선택 대기) */}
+                        {sessionStatus === 'ready_to_select' && (
+                            <div>
+                                {isTeacher ? (
+                                    <div>
+                                        <p style={{ marginBottom: "1rem", fontWeight: "bold", color: "var(--primary)" }}>순위 부여완료. 학생 화면에 공유되었습니다.</p>
+                                        <button onClick={startSeatSelection} disabled={booking} className="btn-primary" style={{ width: "100%", padding: "1rem", fontSize: "1.1rem", background: "#10b981", border: "none" }}>
+                                            🎯 순위별 실시간 자리 선택 시작
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{ textAlign: "center" }}>
+                                        <h4 style={{ fontSize: "1.2rem", marginBottom: "0.5rem" }}>🏆 최종 순위결과 발표</h4>
+                                        <p style={{ marginBottom: "1rem" }}>곧 선생님이 자리선택을 오픈할 예정입니다. 내 순위는 <strong>{selectionOrder.find(o => o.uid === userData?.id)?.rank || "-"}등</strong> 입니다.</p>
+                                    </div>
+                                )}
+                                <div style={{ marginTop: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.5rem" }}>
+                                    {selectionOrder.map((user: any) => (
+                                        <div key={user.uid} style={{ padding: "0.5rem", background: "#f8fafc", border: "2px solid", borderColor: user.uid === userData?.id ? "var(--primary)" : "var(--border)", borderRadius: "6px", textAlign: "center", fontWeight: "bold", opacity: user.uid === userData?.id ? 1 : 0.65 }}>
+                                            <div style={{ color: "var(--primary)", fontSize: "0.9rem" }}>{user.rank}등</div>
+                                            <div style={{ fontSize: "1.1rem", padding: "0.2rem 0" }}>{user.name}</div>
+                                            <div style={{ fontSize: "0.75rem", color: "var(--secondary)" }}>{user.points}P</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 3. 자리 선택 진행 중 */}
+                        {sessionStatus === 'selection' && (
+                            <div>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", background: "#f8fafc", padding: "1rem", borderRadius: "8px", border: "2px solid var(--primary)" }}>
+                                    <div>
+                                        <h4 style={{ fontSize: "1.2rem", color: "var(--text)", margin: 0 }}>
+                                            📢 현재 자리 선택 차례: <span style={{ fontSize: "1.6rem", color: "var(--primary)", marginLeft: "0.5rem" }}>{selectionOrder[currentSelectionIndex]?.name || "모든 선택 종료"} ({selectionOrder[currentSelectionIndex]?.rank || "-"}등)</span>
+                                        </h4>
+                                        {selectionOrder[currentSelectionIndex]?.uid === userData?.id && (
+                                            <p style={{ color: "#ef4444", fontWeight: "bold", marginTop: "0.5rem", marginBottom: 0 }}>👆 지금 하단의 좌석 배치도에서 원하는 빈 자리를 클릭하세요! ({selectionOrder[currentSelectionIndex].points}P 사용)</p>
+                                        )}
+                                    </div>
+                                    {isTeacher && (
+                                        <button onClick={skipTurn} disabled={booking || currentSelectionIndex >= selectionOrder.length} style={{ background: "#ef4444", color: "white", padding: "0.75rem 1rem", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>
+                                            ⏭️ 다음 차례로 스킵
+                                        </button>
+                                    )}
+                                </div>
+                                <div style={{ display: "flex", gap: "0.5rem", overflowX: "auto", paddingBottom: "0.5rem" }}>
+                                    {selectionOrder.map((user: any, idx: number) => {
+                                        const isPast = idx < currentSelectionIndex;
+                                        const isCurrent = idx === currentSelectionIndex;
+                                        return (
+                                            <div key={user.uid} style={{
+                                                flexShrink: 0, padding: "0.5rem", minWidth: "65px", textAlign: "center", borderRadius: "6px",
+                                                background: isCurrent ? "var(--primary)" : isPast ? "#e2e8f0" : "white",
+                                                color: isCurrent ? "white" : isPast ? "#94a3b8" : "var(--text)",
+                                                border: isCurrent ? "none" : "1px solid var(--border)",
+                                                fontWeight: isCurrent ? "bold" : "normal",
+                                                boxShadow: isCurrent ? "0 4px 6px -1px rgba(0,0,0,0.1)" : "none",
+                                                transform: isCurrent ? "scale(1.05)" : "scale(1)",
+                                                transition: "all 0.2s"
+                                            }}>
+                                                <div style={{ fontSize: "0.75rem" }}>{user.rank}등</div>
+                                                <div style={{ marginTop: "0.2rem" }}>{user.name}</div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+                {/* --- 블라인드 모드 UI 끝 --- */}
 
                 <div style={{
                     overflowX: 'auto',

@@ -25,6 +25,7 @@ export default function SessionManagement() {
   const [newTitle, setNewTitle] = useState("");
   const [scheduledOpenAt, setScheduledOpenAt] = useState("");
   const [isAnonymousMode, setIsAnonymousMode] = useState(false);
+  const [isBlindMode, setIsBlindMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const router = useRouter();
@@ -78,6 +79,10 @@ export default function SessionManagement() {
         scheduledOpenAt: (!openNow && scheduledOpenAt) ? scheduledOpenAt : null,
         reservations: {},
         isAnonymous: isAnonymousMode,
+        isBlindMode: isBlindMode,
+        blindBids: {},
+        selectionOrder: [],
+        currentSelectionIndex: 0,
         createdAt: new Date().toISOString(),
       });
 
@@ -189,6 +194,18 @@ export default function SessionManagement() {
               🕵️ 익명 입찰 모드 활성화 (학생 화면에서 이름 숨김)
             </label>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1.5rem" }}>
+            <input
+              type="checkbox"
+              id="blindMode"
+              checked={isBlindMode}
+              onChange={(e) => setIsBlindMode(e.target.checked)}
+              style={{ width: "1.2rem", height: "1.2rem", cursor: "pointer" }}
+            />
+            <label htmlFor="blindMode" style={{ fontSize: "1rem", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              🙈 블라인드 경매 모드 (학생들이 블라인드로 입찰 후 순위 순서대로 자리 선택)
+            </label>
+          </div>
           <div style={{ display: "flex", gap: "1rem" }}>
             <button
               onClick={() => handleCreateSession(true)}
@@ -250,6 +267,14 @@ export default function SessionManagement() {
                         background: "#475569", color: "white"
                       }}>
                         🕵️ 익명 모드
+                      </span>
+                    )}
+                    {(session as any).isBlindMode && (
+                      <span style={{
+                        fontSize: "0.75rem", padding: "2px 8px", borderRadius: "12px",
+                        background: "#8b5cf6", color: "white", marginLeft: "4px"
+                      }}>
+                        🙈 블라인드 모드
                       </span>
                     )}
                   </div>
