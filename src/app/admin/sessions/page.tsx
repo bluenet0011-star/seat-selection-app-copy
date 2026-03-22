@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { db } from "@/lib/firebase";
 import {
   collection, addDoc, getDocs, doc, getDoc,
-  updateDoc, deleteDoc, onSnapshot
+  updateDoc, deleteDoc, onSnapshot, query, where
 } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 
@@ -129,15 +129,47 @@ export default function SessionManagement() {
     if (!confirm("정말로 이 세션을 종료하시겠습니까?")) return;
     try {
       await updateDoc(doc(db, "sessions", sessionId), { status: "closed" });
+
+      const auctionsQuery = query(collection(db, "auctions"), where("sessionId", "==", sessionId));
+      const auctionsSnap = await getDocs(auctionsQuery);
+      auctionsSnap.forEach(async (auctionDoc) => {
+        await updateDoc(doc(db, "auctions", auctionDoc.id), { status: "closed" });
+      });
+
       alert("세션이 종료되었습니다.");
-    } catch (error) { console.error(error); }
+    } catch (error) { console.error("세션 종료 중 오류:", error); }
   };
 
   const handleResumeSession = async (sessionId: string) => {
     try {
       await updateDoc(doc(db, "sessions", sessionId), { status: "open" });
+
+      const auctionsQuery = query(collection(db, "auctions"), where("sessionId", "==", sessionId));
+      const auctionsSnap = await getDocs(auctionsQuery);
+      auctionsSnap.forEach(async (auctionDoc) => {
+        await updateDoc(doc(db, "auctions", auctionDoc.id), { status: "active" });
+      });
+
       alert("세션이 다시 오픈되었습니다.");
-    } catch (error) { console.error(error); }
+    } catch (error) { console.error("세션 재개 중 오류:", error); }
+  };
+
+  const handleDeleteSession = async (sessionId: string) => {
+    if (!confirm("정말로 이 세션을 삭제하시겠습니까? 관련 데이터가 모두 지워집니다.")) return;
+    try {
+      await deleteDoc(doc(db, "sessions", sessionId));
+
+      const auctionsQuery = query(collection(db, "auctions"), where("sessionId", "==", sessionId));
+      const auctionsSnap = await getDocs(auctionsQuery);
+      auctionsSnap.forEach(async (auctionDoc) => {
+        await deleteDoc(doc(db, "auctions", auctionDoc.id));
+      });
+
+      alert("세션이 삭제되었습니다.");
+    } catch (error) {
+      console.error("세션 삭제 중 오류:", error);
+      alert("삭제 중 오류가 발생했습니다.");
+    }
   };
 
   if (loading) return <div className="card">세션 정보를 불러오는 중...</div>;
