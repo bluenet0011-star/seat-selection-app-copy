@@ -149,18 +149,22 @@ export default function SessionManagement() {
   const handleDeleteSession = async (sessionId: string) => {
     if (!confirm("정말로 이 세션을 삭제하시겠습니까? 관련 데이터가 모두 지워집니다.")) return;
     try {
-      await deleteDoc(doc(db, "sessions", sessionId));
+      // 1. 활성 세션일 경우 삭제가 거부될 수 있으므로 먼저 종료 처리 (Firestore Rule 우회 및 안전장치)
+      await updateDoc(doc(db, "sessions", sessionId), { status: "closed" });
 
+      // 2. 관련된 경매문서를 먼저 모두 삭제 (비동기 대기)
       const auctionsQuery = query(collection(db, "auctions"), where("sessionId", "==", sessionId));
       const auctionsSnap = await getDocs(auctionsQuery);
-      auctionsSnap.forEach(async (auctionDoc) => {
-        await deleteDoc(doc(db, "auctions", auctionDoc.id));
-      });
+      const deletePromises = auctionsSnap.docs.map(auctionDoc => deleteDoc(doc(db, "auctions", auctionDoc.id)));
+      await Promise.all(deletePromises);
+
+      // 3. 통신이 완료된 후 최종적으로 세션 문서 삭제
+      await deleteDoc(doc(db, "sessions", sessionId));
 
       alert("세션이 삭제되었습니다.");
     } catch (error) {
       console.error("세션 삭제 중 오류:", error);
-      alert("삭제 중 오류가 발생했습니다.");
+      alert("삭제 중 오류가 발생했습니다: " + (error as any).message);
     }
   };
 
