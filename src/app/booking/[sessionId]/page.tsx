@@ -1023,7 +1023,7 @@ export default function BookingPage({ params }: { params: Promise<{ sessionId: s
                                                 <div style={{ fontSize: '0.75rem' }}>{studentInfo.name}</div>
                                             </>
                                         ) : (
-                                            <div style={{ fontSize: '0.75rem' }}>배정됨</div>
+                                            <div style={{ fontSize: '0.75rem' }}>🔒 익명</div>
                                         )
                                     ) : currentBid ? (
                                         <>
